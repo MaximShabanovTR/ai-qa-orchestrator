@@ -7,8 +7,8 @@ _client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 def chat(
     system: str,
     messages: list[dict],
+    max_tokens: int,
     model: str = DEFAULT_MODEL,
-    max_tokens: int = 4096,
 ) -> str:
     response = _client.messages.create(
         model=model,

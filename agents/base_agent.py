@@ -14,10 +14,11 @@ class BaseAgent(ABC):
         template = path.read_text(encoding="utf-8")
         return template.format(**kwargs) if kwargs else template
 
-    def _call(self, system: str, user_message: str) -> str:
+    def _call(self, system: str, user_message: str, max_tokens: int = 4096) -> str:
         return chat(
             system=system,
             messages=[{"role": "user", "content": user_message}],
+            max_tokens=max_tokens,
         )
 
     def _parse_json(self, text: str):

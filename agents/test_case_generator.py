@@ -15,6 +15,7 @@ class TestCaseGenerator(BaseAgent):
         raw_response = self._call(
             system=system,
             user_message="Generate the test cases and return the JSON array.",
+            max_tokens=16000,
         )
         data = self._parse_json(raw_response)
         session.test_cases = [TestCase(**tc) for tc in data]
