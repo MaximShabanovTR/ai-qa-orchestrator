@@ -10,6 +10,7 @@ class TestCaseGenerator(BaseAgent):
         system = self._load_prompt(
             requirement_json=session.requirement.model_dump_json(indent=2),
             clarifications_json=self._format_clarifications(session),
+            assumptions=self._format_assumptions(session),
         )
         raw_response = self._call(
             system=system,
@@ -21,9 +22,15 @@ class TestCaseGenerator(BaseAgent):
     def _format_clarifications(self, session: Session) -> str:
         answered = session.all_answered_questions
         if not answered:
-            return "No clarifications were needed."
+            return "None"
         lines = []
         for q in answered:
             lines.append(f"Q: {q.question}")
             lines.append(f"A: {q.answer}")
         return "\n".join(lines)
+
+    def _format_assumptions(self, session: Session) -> str:
+        assumptions = session.assumptions_made
+        if not assumptions:
+            return "None"
+        return "\n".join(f"- {a}" for a in assumptions)

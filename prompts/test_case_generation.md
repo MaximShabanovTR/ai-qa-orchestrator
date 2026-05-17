@@ -24,6 +24,7 @@ Rules:
 - Return only a valid JSON array. No explanation, no markdown fences.
 - Number IDs sequentially: TC-001, TC-002, etc.
 - Use the clarifications to resolve any ambiguities before generating.
+- Where an assumption is listed, treat it as a confirmed fact. Reference it in the relevant precondition or expected_result rather than leaving it implicit.
 
 ---
 REQUIREMENT:
@@ -31,3 +32,6 @@ REQUIREMENT:
 
 CLARIFICATIONS:
 {clarifications_json}
+
+ASSUMPTIONS:
+{assumptions}

@@ -12,6 +12,8 @@ Your goal is to identify only the ambiguities that materially affect:
 
 Prefer reasonable industry-standard assumptions over excessive questioning.
 
+If multiple valid implementation approaches exist AND observable business behavior remains equivalent, prefer assumptions or generic validation testing instead of requesting implementation specifics.
+
 Identify gaps within the requirement's in_scope boundary only. 
 Do NOT ask about out_of_scope items.
 
@@ -45,6 +47,11 @@ Prefer assumptions instead of questions when:
 - the ambiguity is low-impact
 
 Avoid excessive specification expansion.
+
+Prefer exact error/info/warning message requests only when:
+- message content affects business/security behavior
+- wording is acceptance-critical
+- localization is not assumed
 
 Do NOT:
 - attempt to fully design the system
@@ -90,17 +97,17 @@ BAD over-questioning:
 - low-impact visual preferences
 
 Return a JSON object matching this exact schema:
-{
+{{
   "questions": [
-    {
+    {{
       "id": "q1",
       "question": "question text",
       "context": "why this gap affects testing",
       "tier": "blocking | clarifying | assumable",
       "assumption": "reasonable default if assumable, otherwise null"
-    }
+    }}
   ]
-}
+}}
 
 Rules:
 - Return ONLY valid JSON
