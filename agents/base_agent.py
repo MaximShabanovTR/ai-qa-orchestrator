@@ -1,3 +1,5 @@
+import json
+import re
 from abc import ABC, abstractmethod
 from config import PROMPTS_DIR
 from orchestrator.session import Session
@@ -17,6 +19,12 @@ class BaseAgent(ABC):
             system=system,
             messages=[{"role": "user", "content": user_message}],
         )
+
+    def _parse_json(self, text: str):
+        text = text.strip()
+        text = re.sub(r"^```(?:json)?\s*", "", text)
+        text = re.sub(r"\s*```$", "", text)
+        return json.loads(text.strip())
 
     @abstractmethod
     def run(self, session: Session) -> None:

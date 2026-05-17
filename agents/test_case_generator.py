@@ -1,4 +1,3 @@
-import json
 from .base_agent import BaseAgent
 from models import TestCase
 from orchestrator.session import Session
@@ -16,7 +15,7 @@ class TestCaseGenerator(BaseAgent):
             system=system,
             user_message="Generate the test cases and return the JSON array.",
         )
-        data = json.loads(raw_response)
+        data = self._parse_json(raw_response)
         session.test_cases = [TestCase(**tc) for tc in data]
 
     def _format_clarifications(self, session: Session) -> str:

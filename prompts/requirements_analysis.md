@@ -5,14 +5,19 @@ Return a JSON object matching this exact schema:
   "title": "short feature name",
   "description": "one paragraph summary",
   "actors": ["list of user roles or systems involved"],
-  "acceptance_criteria": ["list of explicit or implied acceptance criteria"],
-  "scope_notes": "anything ambiguous or out of scope, or null"
+  "acceptance_criteria": ["list of testable behaviors only"],
+  "test_scope": {{
+    "in_scope": ["behaviors explicitly covered by this requirement"],
+    "out_of_scope": ["behaviors explicitly excluded or clearly deferred"]
+  }}
 }}
 
 Rules:
 - Return only valid JSON. No explanation, no markdown fences.
-- Infer acceptance criteria if they are implied but not stated explicitly.
-- Set scope_notes to null if nothing is ambiguous.
+- Focus only on what is explicitly stated or strongly implied in the text. Do not infer business rules, architecture, or edge cases that are not grounded in the input.
+- Acceptance criteria must describe testable behaviors, not system properties. Write "User sees an error message" not "System must handle errors gracefully".
+- in_scope and out_of_scope must reflect the boundary of THIS requirement only. Do not expand into adjacent features.
+- out_of_scope may be an empty list if nothing is explicitly excluded.
 
 ---
 REQUIREMENT:
