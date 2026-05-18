@@ -1,1 +1,9 @@
 .dev/
+.docs/
+.env
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+output/
+.vscode/
