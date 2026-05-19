@@ -1,4 +1,7 @@
+import json
+from pydantic import ValidationError
 from .base_agent import BaseAgent
+from .exceptions import AgentError
 from models import TestCase
 from orchestrator.session import Session
 
@@ -17,11 +20,25 @@ class TestCaseGenerator(BaseAgent):
             user_message="Generate the test cases and return the JSON array.",
             max_tokens=16000,
         )
-        data = self._parse_json(raw_response)
-        session.test_cases = [TestCase(**tc) for tc in data]
+        try:
+            data = self._parse_json(raw_response)
+            if not isinstance(data, list):
+                raise AgentError("TestCaseGenerator: expected a JSON array, got something else")
+            test_cases = [TestCase(**tc) for tc in data]
+        except json.JSONDecodeError as e:
+            raise AgentError(f"TestCaseGenerator: response was not valid JSON — {e}")
+        except (KeyError, TypeError) as e:
+            raise AgentError(f"TestCaseGenerator: unexpected response structure — {e}")
+        except ValidationError as e:
+            raise AgentError(f"TestCaseGenerator: response failed schema validation —\n{e}")
+        session.test_cases = test_cases
 
     def _format_clarifications(self, session: Session) -> str:
-        answered = session.all_answered_questions
+        from models.clarification import QuestionTier
+        answered = [
+            q for q in session.all_answered_questions
+            if q.tier in (QuestionTier.BLOCKING, QuestionTier.CLARIFYING)
+        ]
         if not answered:
             return "None"
         lines = []

@@ -104,7 +104,7 @@ Return a JSON object matching this exact schema:
       "question": "question text",
       "context": "why this gap affects testing",
       "tier": "blocking | clarifying | assumable",
-      "assumption": "reasonable default if assumable, otherwise null"
+      "assumption": "required non-null string describing the assumed behavior if tier is assumable, otherwise null"
     }}
   ]
 }}
@@ -113,8 +113,11 @@ Rules:
 - Return ONLY valid JSON
 - No markdown
 - No explanations outside JSON
+- Number IDs sequentially starting from q{start_id}, incrementing by 1 for each question
 - Order by tier: blocking → clarifying → assumable
 - Do not repeat already answered questions
+- Return at most 5 questions per round; prioritize blocking questions first
+- If tier is assumable, assumption must be a non-null string describing the assumed behavior
 - Prefer fewer high-value questions over many low-value questions
 - Return an empty list if remaining ambiguities are low-risk or reasonably assumable
 
