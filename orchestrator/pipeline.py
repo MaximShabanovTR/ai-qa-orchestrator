@@ -4,6 +4,7 @@ from orchestrator.session import Session
 from agents.requirements_analyst import RequirementsAnalyst
 from agents.clarification_agent import ClarificationAgent
 from agents.test_case_generator import TestCaseGenerator
+from agents.exceptions import AgentError
 
 SCORE_THRESHOLD = 0.85
 
@@ -18,11 +19,20 @@ class Pipeline:
         session = Session(raw_input=raw_input)
 
         print("Analyzing requirements...")
-        self._analyst.run(session)
+        try:
+            self._analyst.run(session)
+        except AgentError as e:
+            print(f"\nFailed to analyze requirements: {e}")
+            return session
 
         for round_num in range(1, MAX_CLARIFICATION_ROUNDS + 1):
             print(f"\nClarification round {round_num}/{MAX_CLARIFICATION_ROUNDS}...")
-            self._clarifier.run(session)
+            try:
+                self._clarifier.run(session)
+            except AgentError as e:
+                print(f"\nClarification round failed: {e}")
+                print("Proceeding to generation with information gathered so far.")
+                break
 
             latest = session.clarification_rounds[-1]
             self._resolve_assumptions(latest)
@@ -51,13 +61,17 @@ class Pipeline:
                 print(f"  - {assumption}")
 
         print("\nGenerating test cases...")
-        self._generator.run(session)
+        try:
+            self._generator.run(session)
+        except AgentError as e:
+            print(f"\nFailed to generate test cases: {e}")
+            return session
 
         return session
 
     def _resolve_assumptions(self, round_) -> None:
         for q in round_.questions:
-            if q.tier == QuestionTier.ASSUMABLE:
+            if q.tier == QuestionTier.ASSUMABLE and q.assumption:
                 q.answer = q.assumption
 
     def _collect_answers(self, round_) -> None:

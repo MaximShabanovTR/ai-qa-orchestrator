@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 from models import TestCase
+from orchestrator.session import Session
 
 
 def write_json(test_cases: list[TestCase], path: Path) -> None:
@@ -8,6 +9,22 @@ def write_json(test_cases: list[TestCase], path: Path) -> None:
         json.dumps([tc.model_dump() for tc in test_cases], indent=2),
         encoding="utf-8",
     )
+
+
+def write_session(session: Session, path: Path) -> None:
+    data = {
+        "raw_input": session.raw_input,
+        "requirement": session.requirement.model_dump() if session.requirement else None,
+        "clarification_rounds": [
+            {
+                "questions": [q.model_dump() for q in round_.questions],
+                "completeness_score": round_.completeness_score,
+            }
+            for round_ in session.clarification_rounds
+        ],
+        "test_cases": [tc.model_dump() for tc in session.test_cases],
+    }
+    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
 def write_markdown(test_cases: list[TestCase], path: Path) -> None:

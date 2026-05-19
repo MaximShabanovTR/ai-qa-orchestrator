@@ -1,4 +1,7 @@
+import json
+from pydantic import ValidationError
 from .base_agent import BaseAgent
+from .exceptions import AgentError
 from models import StructuredRequirement
 from orchestrator.session import Session
 
@@ -12,6 +15,14 @@ class RequirementsAnalyst(BaseAgent):
             system=system,
             user_message="Analyze the requirement and return the JSON.",
         )
-        data = self._parse_json(raw_response)
-        data["raw_input"] = session.raw_input
-        session.requirement = StructuredRequirement(**data)
+        try:
+            data = self._parse_json(raw_response)
+            data["raw_input"] = session.raw_input
+            requirement = StructuredRequirement(**data)
+        except json.JSONDecodeError as e:
+            raise AgentError(f"RequirementsAnalyst: response was not valid JSON — {e}")
+        except (KeyError, TypeError) as e:
+            raise AgentError(f"RequirementsAnalyst: unexpected response structure — {e}")
+        except ValidationError as e:
+            raise AgentError(f"RequirementsAnalyst: response failed schema validation —\n{e}")
+        session.requirement = requirement

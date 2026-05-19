@@ -1,6 +1,6 @@
 from pathlib import Path
 from orchestrator.pipeline import Pipeline
-from services.output_writer import write_json, write_markdown
+from services.output_writer import write_json, write_markdown, write_session
 
 
 def main() -> None:
@@ -27,6 +27,7 @@ def main() -> None:
 
     write_json(session.test_cases, output_dir / "test_cases.json")
     write_markdown(session.test_cases, output_dir / "test_cases.md")
+    write_session(session, output_dir / "session.json")
 
     print(f"\nDone. {len(session.test_cases)} test case(s) written to {output_dir}/")
 
