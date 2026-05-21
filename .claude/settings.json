@@ -1,0 +1,19 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "agent",
+            "if": "Bash(git commit*)",
+            "model": "claude-sonnet-4-6",
+            "timeout": 120,
+            "statusMessage": "Reviewing staged changes before commit...",
+            "prompt": "You are a pre-commit code reviewer. A git commit is about to be made.\n\nFirst, run `git diff --staged` to see the staged changes. Then review them for:\n1. Security vulnerabilities (hardcoded secrets, injection risks, insecure patterns)\n2. Critical bugs or logic errors that would break functionality\n3. Violations of the project's typed contract pattern (raw dicts crossing agent/model/orchestrator layer boundaries instead of Pydantic models)\n4. Missing error handling at external boundaries (user input, API calls)\n\nMinor style issues, missing comments, or refactoring suggestions are NOT a reason to block — only flag critical issues.\n\nIf you find CRITICAL issues, respond with ONLY this JSON:\n{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", \"permissionDecision\": \"deny\", \"permissionDecisionReason\": \"<concise list of critical issues>\"}}\n\nIf the staged changes are acceptable, respond with ONLY this JSON:\n{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", \"permissionDecision\": \"allow\"}}"
+          }
+        ]
+      }
+    ]
+  }
+}
