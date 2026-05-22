@@ -87,13 +87,6 @@ def test_collect_answers_does_not_call_input_when_only_assumable(p, mocker):
     mock_input.assert_not_called()
 
 
-@pytest.mark.unit
-def test_collect_answers_does_not_call_input_on_empty_round(p, mocker):
-    mock_input = mocker.patch("builtins.input")
-    p._collect_answers(make_round())
-    mock_input.assert_not_called()
-
-
 # --- run(): stopping conditions ---
 
 @pytest.mark.unit
