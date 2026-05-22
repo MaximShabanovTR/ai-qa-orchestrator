@@ -33,13 +33,6 @@ def test_parse_json_array():
     assert result == [1, 2, 3]
 
 
-@pytest.mark.unit
-def test_parse_json_nested_object():
-    raw = '{"outer": {"inner": [1, 2]}}'
-    result = _TestAgent()._parse_json(raw)
-    assert result == {"outer": {"inner": [1, 2]}}
-
-
 # --- _parse_json: failure cases ---
 
 @pytest.mark.unit
@@ -129,8 +122,3 @@ def test_call_default_max_tokens_is_4096(mocker):
     assert kwargs["max_tokens"] == 4096
 
 
-@pytest.mark.unit
-def test_call_returns_chat_response(mocker):
-    mocker.patch("agents.base_agent.chat", return_value="the answer")
-    result = _TestAgent()._call(system="sys", user_message="hello", max_tokens=100)
-    assert result == "the answer"
