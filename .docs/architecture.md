@@ -50,3 +50,17 @@ Significant design decisions, trade-offs, and deferred improvements.
 **Why:** Silently defaulting to 4096 on the test case generator caused truncation on large requirement sets. Making callers declare their budget makes the decision visible at the call site rather than hidden in a wrapper.
 
 **Current values:** All agents use 4096 except `TestCaseGenerator`, which uses 16000.
+
+---
+
+## TraceabilityMatrix is computed, not LLM-generated
+
+**Decision:** Coverage is derived from `TestCase.linked_criteria` (LLM-populated AC IDs) and `StructuredRequirement.acceptance_criteria`. The matrix is built by `TraceabilityMatrix.build()` — a pure classmethod with no Claude call.
+
+**Why:** Asking Claude "which test cases cover which ACs?" would create a second LLM pass over already-generated data, introducing a second failure surface and making coverage figures non-reproducible. The LLM's job is to populate `linked_criteria` in each test case. Once those IDs exist, aggregation is deterministic.
+
+**Trade-off:** Coverage quality depends on how accurately the LLM populates `linked_criteria`. A test case that covers AC-003 but omits it from `linked_criteria` will show as a false gap. The prompt instructs the model to include at least one AC ID per test case, but this cannot be strictly enforced.
+
+**Mitigation:** Unknown AC IDs in `linked_criteria` are silently ignored (hallucination guard). The `gaps` list in the matrix carries full `AcceptanceCriterion` objects so output can show gap descriptions without a separate lookup.
+
+**Deferred:** A review agent could cross-check `linked_criteria` against actual test steps to catch mislabeled coverage. That is the purpose of the planned test case review layer.

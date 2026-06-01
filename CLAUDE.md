@@ -47,6 +47,7 @@ class Session:
     requirement: StructuredRequirement | None   # set by RequirementsAnalyst
     clarification_rounds: list[ClarificationRound]  # appended each loop iteration
     test_cases: list[TestCase]                  # set by TestCaseGenerator
+    traceability_matrix: TraceabilityMatrix | None  # built by pipeline after generation
 ```
 
 Properties: `latest_round`, `all_answered_questions` (answered only), `assumptions_made`.
@@ -56,7 +57,9 @@ Properties: `latest_round`, `all_answered_questions` (answered only), `assumptio
 ## Data models
 
 ### `StructuredRequirement` (`models/requirement.py`)
-Extracted from raw input. Contains `title`, `description`, `actors`, `acceptance_criteria`, and `test_scope: TestScope`.
+Extracted from raw input. Contains `title`, `description`, `actors`, `acceptance_criteria: list[AcceptanceCriterion]`, and `test_scope: TestScope`.
+
+`AcceptanceCriterion` has `id: str` (e.g. `"AC-001"`) and `text: str`. IDs are assigned sequentially by the LLM and are used as keys throughout the traceability layer.
 
 `TestScope` has `in_scope: list[str]` and `out_of_scope: list[str]`. The clarification agent only asks about in-scope items. This boundary prevents requirement expansion.
 
@@ -76,7 +79,19 @@ Contains `questions: list[ClarificationQuestion]` and computed properties:
 `completeness_score` is never delegated to Claude. It is always computed from question counts.
 
 ### `TestCase` (`models/test_case.py`)
-Fields: `id`, `title`, `type: TestCaseType`, `priority: Priority`, `preconditions`, `steps: list[TestStep]`, `expected_outcome`, `tags`.
+Fields: `id`, `title`, `type: TestCaseType`, `priority: Priority`, `preconditions`, `steps: list[TestStep]`, `expected_outcome`, `tags`, `linked_criteria: list[str]`.
+
+`linked_criteria` contains AC IDs (e.g. `["AC-001", "AC-003"]`) populated by the LLM. Unknown IDs are silently ignored when building the traceability matrix.
+
+### `TraceabilityMatrix` (`models/traceability.py`)
+Built deterministically after generation. Never delegated to Claude.
+
+Fields:
+- `coverage: dict[str, list[str]]` — AC ID → list of TC IDs that cover it
+- `gaps: list[AcceptanceCriterion]` — ACs with zero coverage (full objects, not just IDs)
+- `coverage_pct: float` — percentage of ACs covered by at least one TC
+
+Built via `TraceabilityMatrix.build(requirement, test_cases)`. Unknown AC IDs in `linked_criteria` are ignored (hallucination guard). `gaps` carries full objects so output can show AC text without a separate lookup.
 
 ---
 
@@ -94,6 +109,8 @@ Each iteration:
 4. `_collect_answers(round)` — prompts user for `BLOCKING` and `CLARIFYING` questions only
 
 After the loop: print assumptions summary, then run `TestCaseGenerator`.
+
+After generation: if `session.requirement` is set, build `TraceabilityMatrix.build(session.requirement, session.test_cases)`, attach it to `session.traceability_matrix`, and print coverage summary.
 
 ---
 
@@ -150,6 +167,8 @@ Templates live in `prompts/*.md`. They use Python's `.format(**kwargs)` for vari
 
 **Deterministic stopping.** `completeness_score` must remain a computed property on `ClarificationRound`, not a Claude-generated field. Do not add an `is_sufficient` flag back.
 
+**Deterministic traceability.** `TraceabilityMatrix` must always be built from `linked_criteria` data, not by asking Claude to assess coverage. The same principle applies: model output is input data, not a decision-making layer.
+
 **Typed contracts.** All data crossing layer boundaries must be a Pydantic model. Do not pass dicts, strings, or untyped structures between agents, orchestrator, and services.
 
 **Bounded scope.** `TestScope.in_scope` is the clarification agent's working boundary. Do not remove it or make the clarification prompt ask about items outside that list.
@@ -165,7 +184,6 @@ Templates live in `prompts/*.md`. They use Python's `.format(**kwargs)` for vari
 - `generators/playwright_generator.py` — stub only; raises `NotImplementedError`
 - FastAPI interface — planned to replace the CLI entry point
 - Test case review layer — a validation agent to detect gaps in the generated suite
-- Traceability — linking test cases back to acceptance criteria
 
 Do not implement these unless explicitly asked.
 
@@ -189,16 +207,17 @@ Do not implement these unless explicitly asked.
 
 ```
 CLAUDE.md                    ← this file (public, tracked)
-.dev/CLAUDE.local.md         ← local session context (git-ignored)
+CLAUDE.local.md              ← local session context (git-ignored)
 .docs/architecture.md        ← architecture decisions (git-ignored, in progress)
 config.py
 main.py
 requirements.txt
 models/
   __init__.py
-  requirement.py             ← StructuredRequirement, TestScope
+  requirement.py             ← StructuredRequirement, AcceptanceCriterion, TestScope
   clarification.py           ← ClarificationQuestion, ClarificationRound, QuestionTier
   test_case.py               ← TestCase, TestStep, Priority, TestCaseType
+  traceability.py            ← TraceabilityMatrix
 orchestrator/
   session.py
   pipeline.py
@@ -217,5 +236,10 @@ services/
 generators/
   base_generator.py
   playwright_generator.py    ← stub
+tests/
+  unit/                      ← fast, no I/O (TraceabilityMatrix, pipeline logic, etc.)
+  contract/                  ← mocked LLM, schema validation
+  smoke/                     ← real LLM, schema-only assertions
+  evals/                     ← real LLM, quality rubric
 output/                      ← generated files (git-ignored)
 ```

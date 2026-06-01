@@ -6,10 +6,11 @@ An AI-driven QA workflow system that takes a plain-text requirement and produces
 
 ## What it does
 
-1. **Analyzes** a requirement and extracts structured information: actors, acceptance criteria, and explicit test scope boundaries.
+1. **Analyzes** a requirement and extracts structured information: actors, acceptance criteria (with sequential IDs), and explicit test scope boundaries.
 2. **Clarifies** gaps through a tiered question loop — blocking gaps require user answers, assumable gaps are resolved silently using industry-standard defaults.
-3. **Generates** a comprehensive test suite covering happy path, edge cases, and negative scenarios.
-4. **Writes** results to `output/test_cases.json` and `output/test_cases.md`.
+3. **Generates** a comprehensive test suite covering happy path, edge cases, and negative scenarios, with each test case linked to the acceptance criteria it covers.
+4. **Traces** coverage: builds a deterministic traceability matrix showing which ACs are covered, by which test cases, and which remain uncovered.
+5. **Writes** results to `output/test_cases.json`, `output/test_cases.md` (with inline traceability table), and `output/session.json`.
 
 The system is designed around a QA-first philosophy: AI outputs are treated as probabilistic, not ground truth. Scope is bounded explicitly to prevent requirement expansion. Stopping logic is deterministic, not delegated to the model.
 
@@ -29,20 +30,35 @@ The Subscribe button should be disabled during processing.
 
 Generated output (excerpt from `output/test_cases.md`):
 
-```
-## [HIGH] Successfully subscribe with a standard valid email address
-Type: happy_path
-Steps:
-  1. Type 'testuser@example.com' into the Email field → field displays the address
-  2. Click Subscribe → button becomes disabled while processing
-  3. Wait for completion → inline message "You have successfully subscribed to the newsletter." is shown
+```markdown
+## TC-001 · [HIGH] Successfully subscribe with a standard valid email address
+**Type:** happy_path
+**Steps:**
+1. Type 'testuser@example.com' into the Email field
+   _Expected: field displays the address_
+2. Click Subscribe
+   _Expected: button becomes disabled while processing_
+3. Wait for completion
+   _Expected: inline message "You have successfully subscribed to the newsletter." is shown_
+**Covers:** AC-001, AC-004
 
-## [HIGH] Submit an email containing a SQL injection attempt
-Type: negative
-Steps:
-  1. Type "'; DROP TABLE subscribers; --@example.com" → text entered into field
-  2. Click Subscribe → form submission attempted
-  3. Observe inline area → error "Please enter a valid email address." is shown, database unaffected
+## TC-012 · [HIGH] Submit an email containing a SQL injection attempt
+**Type:** negative
+**Steps:**
+1. Type "'; DROP TABLE subscribers; --@example.com" into the Email field
+   _Expected: text entered into field_
+2. Click Subscribe
+   _Expected: error "Please enter a valid email address." is shown, database unaffected_
+**Covers:** AC-003
+
+# Traceability Matrix
+
+**Coverage:** 100.0%
+
+| ID | Acceptance Criterion | Test Cases |
+|---|---|---|
+| AC-001 | Email field is present on the form | TC-001, TC-002 |
+| AC-003 | Invalid email shows inline error | TC-005, TC-012, TC-018 |
 ```
 
 The full run produces ~25 test cases spanning form presence, validation, boundary conditions, error recovery, duplicate handling, and security inputs.
@@ -80,7 +96,7 @@ main.py
 raw requirement text
         │
         ▼
-[RequirementsAnalyst]  →  StructuredRequirement (title, actors, AC, test_scope)
+[RequirementsAnalyst]  →  StructuredRequirement (title, actors, AC-001…AC-N, test_scope)
         │
         ▼
 [ClarificationAgent]   →  ClarificationRound (questions with tier + assumption)
@@ -91,11 +107,15 @@ raw requirement text
         ▼  (loop until score ≥ 0.85 or MAX_ROUNDS)
         │
         ▼
-[TestCaseGenerator]    →  list[TestCase]
+[TestCaseGenerator]    →  list[TestCase]  (each TC has linked_criteria: [AC-ids])
+        │
+        ▼
+[TraceabilityMatrix]   →  coverage dict + gaps + coverage_pct  (computed, not LLM)
         │
         ▼
 [output_writer]        →  output/test_cases.json
-                           output/test_cases.md
+                           output/test_cases.md  (with traceability table)
+                           output/session.json
 ```
 
 ---
@@ -149,9 +169,10 @@ ai-qa-orchestrator/
 │   └── test_case_generator.py
 │
 ├── models/
-│   ├── requirement.py               # StructuredRequirement, TestScope
+│   ├── requirement.py               # StructuredRequirement, AcceptanceCriterion, TestScope
 │   ├── clarification.py             # ClarificationQuestion, ClarificationRound, QuestionTier
-│   └── test_case.py                 # TestCase, TestStep, Priority, TestCaseType
+│   ├── test_case.py                 # TestCase, TestStep, Priority, TestCaseType
+│   └── traceability.py              # TraceabilityMatrix
 │
 ├── prompts/
 │   ├── requirements_analysis.md
@@ -245,11 +266,11 @@ The completeness threshold (`0.85`) and penalty weights live in `pipeline.py` an
 | Requirements analysis | Done | Structured extraction with explicit test scope |
 | Tiered clarification loop | Done | BLOCKING / CLARIFYING / ASSUMABLE question tiers |
 | Test case generation | Done | Happy path, edge cases, negative scenarios |
-| JSON + Markdown output | Done | `output/test_cases.json`, `output/test_cases.md` |
-| Playwright test generation | Planned | Transform `TestCase` models into `.spec.ts` files |
-| FastAPI interface | Planned | REST API replacing CLI entry point |
+| Traceability matrix | Done | AC coverage map, gap detection, coverage % |
+| JSON + Markdown output | Done | `test_cases.json`, `test_cases.md`, `session.json` |
 | Test case review layer | Planned | Validation agent to detect gaps in generated suite |
-| Traceability | Planned | Link each test case back to its source AC |
+| FastAPI interface | Planned | REST API replacing CLI entry point |
+| Playwright test generation | Planned | Transform `TestCase` models into `.spec.ts` files |
 
 ---
 
