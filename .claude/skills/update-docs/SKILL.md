@@ -1,6 +1,6 @@
 ---
 name: update-docs
-description: Update README.md, CLAUDE.md, and .docs/architecture.md to reflect the current state of the codebase. Run this before committing agent, model, prompt, or orchestrator changes.
+description: Update README.md, CLAUDE.md, and .docs/architecture.md to reflect the current state of the codebase.
 ---
 
 Update the project documentation to reflect the current state of the code. Follow these steps:
