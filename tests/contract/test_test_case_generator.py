@@ -2,7 +2,7 @@ import json
 import pytest
 from agents.exceptions import AgentError
 from agents.test_case_generator import TestCaseGenerator
-from models.requirement import StructuredRequirement, TestScope as Scope
+from models.requirement import AcceptanceCriterion as AC, StructuredRequirement, TestScope as Scope
 from models.test_case import Priority, TestCaseType as CaseType
 from orchestrator.session import Session
 
@@ -29,6 +29,7 @@ VALID_RESPONSE = json.dumps([
         ],
         "expected_outcome": "User is redirected to the dashboard",
         "tags": ["login", "smoke"],
+        "linked_criteria": ["AC-001"],
     },
     {
         "id": "tc2",
@@ -44,7 +45,7 @@ VALID_RESPONSE = json.dumps([
             },
         ],
         "expected_outcome": "User remains on the login page",
-        # tags field intentionally absent — exercises the Pydantic default
+        # tags and linked_criteria intentionally absent — exercises Pydantic defaults
     },
 ])
 
@@ -61,7 +62,7 @@ def session():
         title="User Login",
         description="Allow authentication.",
         actors=["End user"],
-        acceptance_criteria=["User can log in with valid credentials"],
+        acceptance_criteria=[AC(id="AC-001", text="User can log in with valid credentials")],
         test_scope=Scope(in_scope=["login flow"], out_of_scope=["registration"]),
         raw_input="The system must allow users to log in.",
     )

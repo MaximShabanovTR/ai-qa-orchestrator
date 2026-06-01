@@ -17,7 +17,8 @@ Return a JSON array where each item matches this exact schema:
     }}
   ],
   "expected_outcome": "the final state after all steps complete successfully",
-  "tags": ["optional tags"]
+  "tags": ["optional tags"],
+  "linked_criteria": ["AC-001", "AC-003"]
 }}
 
 Rules:
@@ -25,6 +26,7 @@ Rules:
 - Number IDs sequentially: TC-001, TC-002, etc.
 - Use the clarifications to resolve any ambiguities before generating.
 - Where an assumption is listed, treat it as a confirmed fact. Reference it in the relevant precondition or expected_result rather than leaving it implicit.
+- Every test case must include at least one AC ID in linked_criteria. Use only IDs that appear in the REQUIREMENT above.
 
 ---
 REQUIREMENT:

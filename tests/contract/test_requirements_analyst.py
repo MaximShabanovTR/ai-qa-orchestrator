@@ -12,8 +12,8 @@ VALID_RESPONSE = json.dumps({
     "description": "Allow users to authenticate with email and password.",
     "actors": ["End user", "Auth service"],
     "acceptance_criteria": [
-        "User can log in with valid credentials",
-        "User sees an error on invalid credentials",
+        {"id": "AC-001", "text": "User can log in with valid credentials"},
+        {"id": "AC-002", "text": "User sees an error on invalid credentials"},
     ],
     "test_scope": {
         "in_scope": ["login flow", "password validation"],
@@ -40,6 +40,8 @@ def test_run_populates_requirement_on_valid_response(analyst, session, mocker):
     assert session.requirement.title == "User Login"
     assert session.requirement.actors == ["End user", "Auth service"]
     assert len(session.requirement.acceptance_criteria) == 2
+    assert session.requirement.acceptance_criteria[0].id == "AC-001"
+    assert session.requirement.acceptance_criteria[0].text == "User can log in with valid credentials"
     assert session.requirement.test_scope.in_scope == ["login flow", "password validation"]
     assert session.requirement.test_scope.out_of_scope == ["registration", "password reset"]
 

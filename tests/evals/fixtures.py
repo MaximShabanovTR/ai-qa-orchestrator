@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from models.requirement import StructuredRequirement, TestScope as Scope
+from models.requirement import AcceptanceCriterion as AC, StructuredRequirement, TestScope as Scope
 
 
 @dataclass
@@ -27,11 +27,11 @@ PASSWORD_RESET = EvalFixture(
         ),
         actors=["Registered user", "Email service"],
         acceptance_criteria=[
-            "User receives a reset email after submitting their address",
-            "Reset link is single-use and cannot be reused after activation",
-            "Reset link expires after 24 hours",
-            "User can set a new password via the link",
-            "User is redirected to the login page after a successful reset",
+            AC(id="AC-001", text="User receives a reset email after submitting their address"),
+            AC(id="AC-002", text="Reset link is single-use and cannot be reused after activation"),
+            AC(id="AC-003", text="Reset link expires after 24 hours"),
+            AC(id="AC-004", text="User can set a new password via the link"),
+            AC(id="AC-005", text="User is redirected to the login page after a successful reset"),
         ],
         test_scope=Scope(
             in_scope=["reset request", "email delivery", "link expiry", "password update"],
@@ -56,11 +56,11 @@ SHOPPING_CART = EvalFixture(
         ),
         actors=["Authenticated user", "Product catalog", "Tax service"],
         acceptance_criteria=[
-            "User can add a product to the cart",
-            "User can change the quantity of a cart item",
-            "User can remove an item from the cart",
-            "Cart persists when the user logs out and back in",
-            "Cart displays the correct total price including tax",
+            AC(id="AC-001", text="User can add a product to the cart"),
+            AC(id="AC-002", text="User can change the quantity of a cart item"),
+            AC(id="AC-003", text="User can remove an item from the cart"),
+            AC(id="AC-004", text="Cart persists when the user logs out and back in"),
+            AC(id="AC-005", text="Cart displays the correct total price including tax"),
         ],
         test_scope=Scope(
             in_scope=["add to cart", "quantity update", "item removal", "cart persistence", "price calculation"],
@@ -83,11 +83,11 @@ USER_PROFILE = EvalFixture(
         ),
         actors=["Authenticated user", "Email service"],
         acceptance_criteria=[
-            "User can update their display name and see the change immediately",
-            "User can upload or replace their avatar",
-            "Changing email triggers a verification email to the new address",
-            "Email change only takes effect after the user clicks the verification link",
-            "Unverified email changes do not affect the current login email",
+            AC(id="AC-001", text="User can update their display name and see the change immediately"),
+            AC(id="AC-002", text="User can upload or replace their avatar"),
+            AC(id="AC-003", text="Changing email triggers a verification email to the new address"),
+            AC(id="AC-004", text="Email change only takes effect after the user clicks the verification link"),
+            AC(id="AC-005", text="Unverified email changes do not affect the current login email"),
         ],
         test_scope=Scope(
             in_scope=["display name update", "avatar upload", "email change", "email verification"],

@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from models import StructuredRequirement, ClarificationRound, TestCase
+from models import StructuredRequirement, ClarificationRound, TestCase, TraceabilityMatrix
 from models.clarification import ClarificationQuestion, QuestionTier
 
 
@@ -9,6 +9,7 @@ class Session:
     requirement: StructuredRequirement | None = None
     clarification_rounds: list[ClarificationRound] = field(default_factory=list)
     test_cases: list[TestCase] = field(default_factory=list)
+    traceability_matrix: TraceabilityMatrix | None = None
 
     @property
     def latest_round(self) -> ClarificationRound | None:

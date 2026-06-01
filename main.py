@@ -26,7 +26,7 @@ def main() -> None:
     output_dir.mkdir(exist_ok=True)
 
     write_json(session.test_cases, output_dir / "test_cases.json")
-    write_markdown(session.test_cases, output_dir / "test_cases.md")
+    write_markdown(session.test_cases, output_dir / "test_cases.md", session.traceability_matrix, session.requirement)
     write_session(session, output_dir / "session.json")
 
     print(f"\nDone. {len(session.test_cases)} test case(s) written to {output_dir}/")

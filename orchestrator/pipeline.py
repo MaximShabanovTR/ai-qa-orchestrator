@@ -1,5 +1,6 @@
 from config import MAX_CLARIFICATION_ROUNDS
 from models.clarification import QuestionTier
+from models.traceability import TraceabilityMatrix
 from orchestrator.session import Session
 from agents.requirements_analyst import RequirementsAnalyst
 from agents.clarification_agent import ClarificationAgent
@@ -66,6 +67,19 @@ class Pipeline:
         except AgentError as e:
             print(f"\nFailed to generate test cases: {e}")
             return session
+
+        if session.requirement:
+            session.traceability_matrix = TraceabilityMatrix.build(
+                session.requirement, session.test_cases
+            )
+            covered = len(session.traceability_matrix.coverage) - len(session.traceability_matrix.gaps)
+            total = len(session.traceability_matrix.coverage)
+            print(f"Traceability: {covered}/{total} acceptance criteria covered "
+                  f"({session.traceability_matrix.coverage_pct}%)")
+            if session.traceability_matrix.gaps:
+                print("Uncovered criteria:")
+                for ac in session.traceability_matrix.gaps:
+                    print(f"  - [{ac.id}] {ac.text}")
 
         return session
 
