@@ -112,3 +112,4 @@ class Pipeline:
             print(f"[{q.id}] [{q.tier.value.upper()}] {q.question}")
             print(f"      Why this matters: {q.context}")
             q.answer = input("      Your answer: ").strip()
+# test
