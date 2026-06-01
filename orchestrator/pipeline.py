@@ -16,12 +16,27 @@ class Pipeline:
         self._clarifier = ClarificationAgent()
         self._generator = TestCaseGenerator()
 
+    def analyze(self, session: Session) -> None:
+        self._analyst.run(session)
+
+    def clarify(self, session: Session) -> None:
+        self._clarifier.run(session)
+        latest = session.clarification_rounds[-1]
+        self._resolve_assumptions(latest)
+
+    def generate(self, session: Session) -> None:
+        self._generator.run(session)
+        if session.requirement:
+            session.traceability_matrix = TraceabilityMatrix.build(
+                session.requirement, session.test_cases
+            )
+
     def run(self, raw_input: str) -> Session:
         session = Session(raw_input=raw_input)
 
         print("Analyzing requirements...")
         try:
-            self._analyst.run(session)
+            self.analyze(session)
         except AgentError as e:
             print(f"\nFailed to analyze requirements: {e}")
             return session
@@ -29,14 +44,13 @@ class Pipeline:
         for round_num in range(1, MAX_CLARIFICATION_ROUNDS + 1):
             print(f"\nClarification round {round_num}/{MAX_CLARIFICATION_ROUNDS}...")
             try:
-                self._clarifier.run(session)
+                self.clarify(session)
             except AgentError as e:
                 print(f"\nClarification round failed: {e}")
                 print("Proceeding to generation with information gathered so far.")
                 break
 
             latest = session.clarification_rounds[-1]
-            self._resolve_assumptions(latest)
 
             if not latest.questions:
                 print("No gaps found. Requirements are clear.")
@@ -63,15 +77,12 @@ class Pipeline:
 
         print("\nGenerating test cases...")
         try:
-            self._generator.run(session)
+            self.generate(session)
         except AgentError as e:
             print(f"\nFailed to generate test cases: {e}")
             return session
 
-        if session.requirement:
-            session.traceability_matrix = TraceabilityMatrix.build(
-                session.requirement, session.test_cases
-            )
+        if session.traceability_matrix:
             covered = len(session.traceability_matrix.coverage) - len(session.traceability_matrix.gaps)
             total = len(session.traceability_matrix.coverage)
             print(f"Traceability: {covered}/{total} acceptance criteria covered "
