@@ -5,13 +5,8 @@
         "matcher": "Bash",
         "hooks": [
           {
-            "type": "command",
-            "command": "bash -c 'staged=$(git diff --cached --name-only 2>/dev/null); if echo \"$staged\" | grep -qE \"^(agents|models|prompts|orchestrator)/\" && ! echo \"$staged\" | grep -qE \"^(README\\.md|CLAUDE\\.md|\\.docs/architecture\\.md)\"; then echo \"Docs not updated: README.md, CLAUDE.md, or .docs/architecture.md not staged. Update docs first, then re-commit. (git commit --no-verify to skip)\"; exit 1; fi'",
-            "if": "Bash(git commit*)"
-          },
-          {
             "type": "agent",
-            "if": "Bash(git commit*)",
+            "if": "Bash(*git commit*)",
             "model": "claude-sonnet-4-6",
             "timeout": 120,
             "statusMessage": "Reviewing staged changes before commit...",
