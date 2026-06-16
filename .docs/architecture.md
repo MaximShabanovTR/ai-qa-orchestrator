@@ -4,20 +4,42 @@ Significant design decisions, trade-offs, and deferred improvements.
 
 ---
 
-## Session is mutable, not immutable
+## LangGraph replaces the sequential pipeline
 
-**Decision:** Agents mutate `Session` in place rather than returning new instances.
+**Decision:** The clarification loop and agent sequencing moved from `orchestrator/pipeline.py` into a LangGraph `StateGraph` (`workflow/graph.py` + `workflow/nodes.py`).
 
-**Why:** The pipeline is strictly sequential. There is no parallelism, no branching, and no need to diff states between agents. `deepcopy` on nested Pydantic models would add overhead with no functional benefit at this scale. Debugging is better served by logging than by snapshot copies.
+**Why:** The CLI pipeline used a blocking `input()` loop. This works on a terminal but cannot serve an HTTP client — the process would block waiting for stdin while the HTTP request has already responded. LangGraph's `interrupt()` mechanism pauses the graph at an explicit checkpoint, serializes state to a checkpointer, and resumes when `Command(resume=...)` is called in a subsequent HTTP request. This makes the same clarification loop work across multiple HTTP round-trips without changing any agent code.
 
-**Trade-off:** No structural audit trail of session state after each agent. Debugging a downstream failure requires reading the pipeline flow to understand what each agent was responsible for.
+**Trade-off:** LangGraph adds an indirection layer. To understand the flow, you must read the graph wiring in `graph.py` and the node functions in `nodes.py`, not a single sequential function. The `QAState` TypedDict and `Session` dataclass now coexist, which adds surface area.
 
-**Deferred:** If the pipeline ever becomes parallel (task graph execution, concurrent agents), this needs a full redesign — not just immutable copies. Immutable session would not solve the concurrency problem; it would just shift it.
+**Why not pure FastAPI with in-memory session objects?** State would live only in a Python dict, with no serializable checkpoint. Resuming a session after a server restart would lose all progress. LangGraph's checkpointer is swappable (memory → SQLite → Redis) without changing any node code.
 
-**Mitigation now:** Agent responsibilities are clearly partitioned. Each agent owns exactly one field on the session:
+---
+
+## Session as a node-to-agent bridge
+
+**Decision:** Each node constructs a temporary `Session` dataclass, calls the agent with it, then extracts results back into a state dict. `Session` is never stored directly in `QAState`.
+
+**Why:** Agents were designed to receive a `Session` and mutate it. Changing them to accept/return raw dicts or `QAState` would require rewriting all agents and their tests. The bridge pattern keeps agents unchanged while making nodes compatible with LangGraph's state model.
+
+**Trade-off:** Each node duplicates a small amount of construction boilerplate. The alternative (making agents LangGraph-native) would couple them to a specific orchestration framework.
+
+**`deepcopy` requirement:** Nodes pass `copy.deepcopy(list(state["clarification_rounds"]))` to `Session`. This is mandatory — passing the live list by reference would allow `ClarificationAgent` (which mutates questions in place) to corrupt the objects already stored in the LangGraph checkpoint, causing non-deterministic behavior on resume.
+
+---
+
+## Session is mutable inside agents (unchanged)
+
+**Decision:** Agents mutate `Session` in place rather than returning new instances. This has not changed with the LangGraph migration.
+
+**Why:** Agent code is unchanged. The `deepcopy` in node construction ensures mutations inside an agent do not affect LangGraph's checkpointed state. Agents remain testable in isolation without any graph machinery.
+
+**Partitioning:**
 - `RequirementsAnalyst` → `session.requirement`
 - `ClarificationAgent` → `session.clarification_rounds` (append only)
 - `TestCaseGenerator` → `session.test_cases`
+
+**Deferred:** If agents ever run concurrently, the `Session` bridge pattern must be replaced with a fully immutable approach — `deepcopy` in the node only protects checkpoint state, not cross-agent concurrency.
 
 ---
 
@@ -29,7 +51,7 @@ Significant design decisions, trade-offs, and deferred improvements.
 
 **Formula:** `1.0 - min(blocking * 0.30, 0.60) - min(clarifying * 0.10, 0.30)`
 
-**Threshold:** `SCORE_THRESHOLD = 0.85` in `pipeline.py`. Adjust there, not in the model.
+**Threshold:** `SCORE_THRESHOLD = 0.85` in `config.py`. The `clarify` node imports it from there. Adjust in `config.py`, not in the node or the model.
 
 ---
 
@@ -50,3 +72,39 @@ Significant design decisions, trade-offs, and deferred improvements.
 **Why:** Silently defaulting to 4096 on the test case generator caused truncation on large requirement sets. Making callers declare their budget makes the decision visible at the call site rather than hidden in a wrapper.
 
 **Current values:** All agents use 4096 except `TestCaseGenerator`, which uses 16000.
+
+---
+
+## TraceabilityMatrix is computed, not LLM-generated
+
+**Decision:** Coverage is derived from `TestCase.linked_criteria` (LLM-populated AC IDs) and `StructuredRequirement.acceptance_criteria`. The matrix is built by `TraceabilityMatrix.build()` — a pure classmethod with no Claude call.
+
+**Why:** Asking Claude "which test cases cover which ACs?" would create a second LLM pass over already-generated data, introducing a second failure surface and making coverage figures non-reproducible. The LLM's job is to populate `linked_criteria` in each test case. Once those IDs exist, aggregation is deterministic.
+
+**Trade-off:** Coverage quality depends on how accurately the LLM populates `linked_criteria`. A test case that covers AC-003 but omits it from `linked_criteria` will show as a false gap. The prompt instructs the model to include at least one AC ID per test case, but this cannot be strictly enforced.
+
+**Mitigation:** Unknown AC IDs in `linked_criteria` are silently ignored (hallucination guard). The `gaps` list in the matrix carries full `AcceptanceCriterion` objects so output can show gap descriptions without a separate lookup.
+
+**Deferred:** A review agent could cross-check `linked_criteria` against actual test steps to catch mislabeled coverage. That is the purpose of the planned test case review layer.
+
+---
+
+## Two-endpoint API with unified SessionResponse
+
+**Decision:** The HTTP API exposes exactly two endpoints — `POST /sessions` (start) and `POST /sessions/{id}/answers` (resume) — both returning the same `SessionResponse` schema.
+
+**Why:** The clarification loop is a conversation: multiple round-trips, each either asking more questions or finishing. Splitting into separate endpoints per state (start, clarify, generate) would require the client to manage state machine transitions. A unified response with a `status` discriminator (`awaiting_clarification` | `complete`) lets the client use a single loop: send request → check status → either submit answers or use the result.
+
+**Trade-off:** A single response schema carries optional fields for both states (`questions` for AWAITING, `test_cases`/`traceability` for COMPLETE), which can be confusing at first read. The alternative — separate response types per status — would require the client to handle two distinct schemas from the same endpoint, which is equally awkward. The discriminator field makes the current approach workable.
+
+**Why not three endpoints?** An earlier design had separate endpoints for clarification and generation. This forced the client to know the session's current phase and route to the right endpoint — effectively reimplementing the state machine on the client side. Removing that duplication is the primary motivation for the unified design.
+
+---
+
+## SessionStore is a set, not a map
+
+**Decision:** `api/session_store.py` stores only session UUIDs in a `set[str]`. It does not store session data.
+
+**Why:** LangGraph's `MemorySaver` checkpointer owns all session state, keyed by `thread_id` (which equals `session_id`). A second data store would be a redundant copy with a divergence risk. The `SessionStore` exists only to answer "is this session_id valid?" for the 404 check — nothing more.
+
+**Implication:** Deleting a session from the store does not delete LangGraph checkpoint data. In production, checkpoint cleanup would need to be handled separately (e.g., TTL on the checkpoint backend).

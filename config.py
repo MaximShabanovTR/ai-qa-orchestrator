@@ -10,4 +10,5 @@ if not ANTHROPIC_API_KEY:
 
 DEFAULT_MODEL: str = "claude-sonnet-4-6"
 MAX_CLARIFICATION_ROUNDS: int = 3
+SCORE_THRESHOLD: float = 0.85
 PROMPTS_DIR: Path = Path(__file__).parent / "prompts"

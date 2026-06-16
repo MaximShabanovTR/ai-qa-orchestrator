@@ -29,3 +29,4 @@ class TestCase(BaseModel):
     steps: list[TestStep]
     expected_outcome: str
     tags: list[str] = []
+    linked_criteria: list[str] = []

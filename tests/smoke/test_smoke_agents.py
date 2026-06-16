@@ -10,7 +10,7 @@ import pytest
 from agents.clarification_agent import ClarificationAgent
 from agents.requirements_analyst import RequirementsAnalyst
 from agents.test_case_generator import TestCaseGenerator
-from models.requirement import StructuredRequirement, TestScope as Scope
+from models.requirement import AcceptanceCriterion as AC, StructuredRequirement, TestScope as Scope
 from models.test_case import TestCaseType, Priority
 from orchestrator.session import Session
 
@@ -29,9 +29,9 @@ def _base_session() -> Session:
         description="Allow registered users to reset their password via email link.",
         actors=["Registered user", "Email service"],
         acceptance_criteria=[
-            "User receives a reset email after requesting it",
-            "Reset link expires after 24 hours",
-            "User can set a new password via the link",
+            AC(id="AC-001", text="User receives a reset email after requesting it"),
+            AC(id="AC-002", text="Reset link expires after 24 hours"),
+            AC(id="AC-003", text="User can set a new password via the link"),
         ],
         test_scope=Scope(
             in_scope=["reset request flow", "link expiry", "password update"],
@@ -56,6 +56,9 @@ def test_requirements_analyst_produces_valid_schema():
     assert req.description
     assert isinstance(req.actors, list)
     assert isinstance(req.acceptance_criteria, list)
+    for ac in req.acceptance_criteria:
+        assert ac.id.startswith("AC-")
+        assert ac.text
     assert isinstance(req.test_scope.in_scope, list)
     assert isinstance(req.test_scope.out_of_scope, list)
     assert req.raw_input == RAW_INPUT
@@ -94,6 +97,7 @@ def test_test_case_generator_produces_valid_schema():
         assert isinstance(tc.preconditions, list)
         assert len(tc.steps) >= 1
         assert tc.expected_outcome
+        assert isinstance(tc.linked_criteria, list)
         for step in tc.steps:
             assert step.step_number >= 1
             assert step.action

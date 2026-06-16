@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "agent",
-            "if": "Bash(git commit*)",
+            "if": "Bash(*git commit*)",
             "model": "claude-sonnet-4-6",
             "timeout": 120,
             "statusMessage": "Reviewing staged changes before commit...",

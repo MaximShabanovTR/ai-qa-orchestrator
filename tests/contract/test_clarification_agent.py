@@ -3,7 +3,7 @@ import pytest
 from agents.clarification_agent import ClarificationAgent
 from agents.exceptions import AgentError
 from models.clarification import QuestionTier
-from models.requirement import StructuredRequirement, TestScope as Scope
+from models.requirement import AcceptanceCriterion as AC, StructuredRequirement, TestScope as Scope
 from orchestrator.session import Session
 
 
@@ -46,7 +46,7 @@ def session():
         title="User Login",
         description="Allow authentication.",
         actors=["End user"],
-        acceptance_criteria=["User can log in with valid credentials"],
+        acceptance_criteria=[AC(id="AC-001", text="User can log in with valid credentials")],
         test_scope=Scope(in_scope=["login flow"], out_of_scope=["registration"]),
         raw_input="The system must allow users to log in.",
     )
