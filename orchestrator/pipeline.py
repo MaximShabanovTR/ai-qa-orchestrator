@@ -1,4 +1,4 @@
-from config import MAX_CLARIFICATION_ROUNDS
+from config import MAX_CLARIFICATION_ROUNDS, SCORE_THRESHOLD
 from models.clarification import QuestionTier
 from models.traceability import TraceabilityMatrix
 from orchestrator.session import Session
@@ -6,8 +6,6 @@ from agents.requirements_analyst import RequirementsAnalyst
 from agents.clarification_agent import ClarificationAgent
 from agents.test_case_generator import TestCaseGenerator
 from agents.exceptions import AgentError
-
-SCORE_THRESHOLD = 0.85
 
 
 class Pipeline:
@@ -112,4 +110,3 @@ class Pipeline:
             print(f"[{q.id}] [{q.tier.value.upper()}] {q.question}")
             print(f"      Why this matters: {q.context}")
             q.answer = input("      Your answer: ").strip()
-# test

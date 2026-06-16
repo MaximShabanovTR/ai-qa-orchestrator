@@ -1,11 +1,19 @@
 from fastapi import APIRouter, HTTPException, Request
+from langgraph.types import Command
 from agents.exceptions import AgentError
 from models.clarification import QuestionTier
 from api.schemas import (
-    AcceptanceCriterionOut, ClarificationResponse, CreateSessionRequest,
-    GenerateResponse, QuestionOut, RequirementOut, SessionCreatedResponse,
-    SessionStatus, SubmitAnswersRequest, TestCaseOut, TestScopeOut,
-    TestStepOut, TraceabilityOut,
+    AcceptanceCriterionOut,
+    CreateSessionRequest,
+    QuestionOut,
+    RequirementOut,
+    SessionResponse,
+    SessionStatus,
+    SubmitAnswersRequest,
+    TestScopeOut,
+    TestCaseOut,
+    TestStepOut,
+    TraceabilityOut,
 )
 
 router = APIRouter()
@@ -13,11 +21,17 @@ router = APIRouter()
 
 # --- helpers ---
 
+
 def _require_session(request: Request, session_id: str):
-    session = request.app.state.store.get(session_id)
-    if session is None:
+    session = request.app.state.store.exists(session_id)
+    if not session:
         raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
-    return session
+    
+
+def _session_complete_check(request: Request, config: dict):
+    state = request.app.state.graph.get_state(config)
+    if state.values.get("clarification_complete"):
+        raise HTTPException(status_code=409, detail="Session is already complete")
 
 
 def _requirement_out(req) -> RequirementOut:
@@ -36,45 +50,7 @@ def _requirement_out(req) -> RequirementOut:
     )
 
 
-# --- endpoints ---
-
-@router.post("", response_model=SessionCreatedResponse, status_code=201)
-def create_session(body: CreateSessionRequest, request: Request):
-    """Analyze a requirement. Returns a session id and the structured requirement."""
-    store = request.app.state.store
-    pipeline = request.app.state.pipeline
-
-    session_id, session = store.create(body.requirement)
-    try:
-        pipeline.analyze(session)
-    except AgentError as e:
-        raise HTTPException(status_code=422, detail=str(e))
-
-    return SessionCreatedResponse(
-        id=session_id,
-        status=SessionStatus.ANALYZED,
-        requirement=_requirement_out(session.requirement),
-    )
-
-
-@router.post("/{session_id}/clarification", response_model=ClarificationResponse)
-def run_clarification(session_id: str, request: Request, body: SubmitAnswersRequest | None = None):
-    """Run one clarification round. Optionally submit answers to the previous round first."""
-    session = _require_session(request, session_id)
-    pipeline = request.app.state.pipeline
-
-    # Apply answers to the most recent round before running the next one
-    if body and body.answers and session.latest_round:
-        for question in session.latest_round.questions:
-            if question.id in body.answers:
-                question.answer = body.answers[question.id]
-
-    try:
-        pipeline.clarify(session)
-    except AgentError as e:
-        raise HTTPException(status_code=422, detail=str(e))
-
-    latest = session.latest_round
+def _question_out(questions: list) -> list[QuestionOut]:
     questions_for_user = [
         QuestionOut(
             id=q.id,
@@ -83,37 +59,14 @@ def run_clarification(session_id: str, request: Request, body: SubmitAnswersRequ
             tier=q.tier.value,
             assumption=q.assumption,
         )
-        for q in latest.questions
+        for q in questions
         if q.tier in (QuestionTier.BLOCKING, QuestionTier.CLARIFYING)
     ]
-
-    if not questions_for_user or (
-        latest.blocking_count == 0 and latest.completeness_score >= 0.85
-    ):
-        status = SessionStatus.READY_TO_GENERATE
-    else:
-        status = SessionStatus.AWAITING_CLARIFICATION
-
-    return ClarificationResponse(
-        session_id=session_id,
-        status=status,
-        round_number=len(session.clarification_rounds),
-        questions=questions_for_user,
-    )
+    return questions_for_user
 
 
-@router.post("/{session_id}/generate", response_model=GenerateResponse)
-def generate_test_cases(session_id: str, request: Request):
-    """Generate test cases and build the traceability matrix."""
-    session = _require_session(request, session_id)
-    pipeline = request.app.state.pipeline
-
-    try:
-        pipeline.generate(session)
-    except AgentError as e:
-        raise HTTPException(status_code=422, detail=str(e))
-
-    test_cases = [
+def _test_cases_out(test_cases: list) -> list[TestCaseOut]:
+    return [
         TestCaseOut(
             id=tc.id,
             title=tc.title,
@@ -132,21 +85,83 @@ def generate_test_cases(session_id: str, request: Request):
             tags=tc.tags,
             linked_criteria=tc.linked_criteria,
         )
-        for tc in session.test_cases
+        for tc in test_cases
     ]
 
-    traceability = None
-    if session.traceability_matrix:
-        tm = session.traceability_matrix
-        traceability = TraceabilityOut(
-            coverage=tm.coverage,
-            gaps=[AcceptanceCriterionOut(id=ac.id, text=ac.text) for ac in tm.gaps],
-            coverage_pct=tm.coverage_pct,
+
+def _traceability_out(traceability_matrix) -> TraceabilityOut:
+    return TraceabilityOut(
+        coverage=traceability_matrix.coverage,
+        gaps=[
+            AcceptanceCriterionOut(id=ac.id, text=ac.text)
+            for ac in traceability_matrix.gaps
+        ],
+        coverage_pct=traceability_matrix.coverage_pct,
+    )
+
+
+def _build_response(session_id: str, state) -> SessionResponse:
+    req = state.values.get("requirement")
+    if state.values.get("clarification_complete") is False:
+        return SessionResponse(
+            session_id=session_id,
+            status=SessionStatus.AWAITING_CLARIFICATION,   
+            requirement=_requirement_out(req) if req else None,
+            questions=_question_out(state.values["clarification_rounds"][-1].questions) if state.values.get("clarification_rounds") else [],
+        )
+    else:
+        return SessionResponse(
+            session_id=session_id,
+            status=SessionStatus.COMPLETE,
+            requirement=_requirement_out(req) if req else None,
+            test_cases=_test_cases_out(state.values.get("test_cases", [])),
+            traceability=_traceability_out(tm) if (tm := state.values["traceability_matrix"]) else None,
         )
 
-    return GenerateResponse(
-        session_id=session_id,
-        status=SessionStatus.COMPLETE,
-        test_cases=test_cases,
-        traceability=traceability,
-    )
+
+# --- endpoints ---
+
+
+@router.post("", response_model=SessionResponse, status_code=201)
+def create_session(body: CreateSessionRequest, request: Request):
+    """Analyze a requirement. Returns a session id and the structured requirement."""
+    store = request.app.state.store
+
+    session_id = store.create()
+    config = {"configurable": {"thread_id": session_id}}
+    try:
+        request.app.state.graph.invoke(
+            {
+                "raw_input": body.requirement,
+                "requirement": None,
+                "clarification_rounds": [],
+                "clarification_complete": False,
+                "pending_answers": {},
+                "test_cases": [],
+                "traceability_matrix": None,
+            },
+            config=config,
+        )
+    except AgentError as e:
+        store.delete(session_id)
+        raise HTTPException(status_code=422, detail=str(e))
+
+    state = request.app.state.graph.get_state(config)
+
+    return _build_response(session_id, state)
+
+
+@router.post("/{session_id}/answers", response_model=SessionResponse)
+def submit_answers(session_id: str, body: SubmitAnswersRequest, request: Request):
+    """Submit answers for a session. Returns the updated session."""
+    _require_session(request, session_id)
+    config = {"configurable": {"thread_id": session_id}}
+    _session_complete_check(request, config)
+    try:
+        request.app.state.graph.invoke(Command(resume=body.answers), config=config)
+    except AgentError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    
+    state = request.app.state.graph.get_state(config)
+
+    return _build_response(session_id, state)

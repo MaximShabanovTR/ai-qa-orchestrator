@@ -74,21 +74,10 @@ class TraceabilityOut(BaseModel):
 
 # --- endpoint responses ---
 
-class SessionCreatedResponse(BaseModel):
-    id: str
-    status: SessionStatus
-    requirement: RequirementOut
-
-
-class ClarificationResponse(BaseModel):
+class SessionResponse(BaseModel):
     session_id: str
     status: SessionStatus
-    round_number: int
-    questions: list[QuestionOut]
-
-
-class GenerateResponse(BaseModel):
-    session_id: str
-    status: SessionStatus
-    test_cases: list[TestCaseOut]
-    traceability: TraceabilityOut | None
+    requirement: RequirementOut | None = None        # present when AWAITING_CLARIFICATION, COMPLETE
+    questions: list[QuestionOut] | None = None       # present when AWAITING_CLARIFICATION
+    test_cases: list[TestCaseOut] | None = None      # present when COMPLETE
+    traceability: TraceabilityOut | None = None      # present when COMPLETE

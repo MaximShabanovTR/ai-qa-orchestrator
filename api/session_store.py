@@ -1,16 +1,17 @@
 import uuid
-from orchestrator.session import Session
 
 
 class SessionStore:
     def __init__(self) -> None:
-        self._store: dict[str, Session] = {}
+        self._store: set[str] = set()
 
-    def create(self, raw_input: str) -> tuple[str, Session]:
+    def create(self) -> str:
         session_id = str(uuid.uuid4())
-        session = Session(raw_input=raw_input)
-        self._store[session_id] = session
-        return session_id, session
+        self._store.add(session_id)
+        return session_id
 
-    def get(self, session_id: str) -> Session | None:
-        return self._store.get(session_id)
+    def exists(self, session_id: str) -> bool:
+        return session_id in self._store
+    
+    def delete(self, session_id: str) -> None:
+        self._store.discard(session_id)
