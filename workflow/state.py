@@ -3,6 +3,7 @@ from typing import Annotated, TypedDict
 
 from models.clarification import ClarificationRound
 from models.requirement import StructuredRequirement
+from models.review import ReviewReport
 from models.test_case import TestCase
 from models.traceability import TraceabilityMatrix
 
@@ -15,3 +16,4 @@ class QAState(TypedDict):
     pending_answers: dict[str, str]   # question id → answer text, set by the interrupt
     test_cases: list[TestCase]
     traceability_matrix: TraceabilityMatrix | None
+    review_report: ReviewReport | None

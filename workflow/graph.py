@@ -2,7 +2,7 @@ from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import MemorySaver
 
 from workflow.state import QAState
-from workflow.nodes import analyze, clarify, generate, collect_answers
+from workflow.nodes import analyze, clarify, generate, collect_answers, review
 
 # MemorySaver keeps state in memory — enough for development.
 # Swap for SqliteSaver or RedisSaver later without changing any node code.
@@ -22,12 +22,14 @@ def build_graph():
     graph.add_node("collect_answers", collect_answers)
     graph.add_node("clarify", clarify)
     graph.add_node("generate", generate)
+    graph.add_node("review", review)
 
     graph.add_edge(START, "analyze")
     graph.add_edge("analyze", "clarify")
     graph.add_conditional_edges("clarify", route_after_clarification)
     graph.add_edge("collect_answers", "clarify")
-    graph.add_edge("generate", END)
+    graph.add_edge("generate", "review")
+    graph.add_edge("review", END)
 
     return graph.compile(checkpointer=_checkpointer)
 

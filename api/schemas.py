@@ -53,6 +53,13 @@ class TestStepOut(BaseModel):
     action: str
     expected_result: str
 
+class ReviewFindingOut(BaseModel):
+    category: str
+    severity: str
+    message: str
+    criterion_ids: list[str]
+    test_case_ids: list[str]
+    source: str
 
 class TestCaseOut(BaseModel):
     id: str
@@ -71,6 +78,10 @@ class TraceabilityOut(BaseModel):
     gaps: list[AcceptanceCriterionOut]
     coverage_pct: float
 
+class ReviewReportOut(BaseModel):
+    findings: list[ReviewFindingOut]
+    error_count: int
+    passed: bool
 
 # --- endpoint responses ---
 
@@ -81,3 +92,4 @@ class SessionResponse(BaseModel):
     questions: list[QuestionOut] | None = None       # present when AWAITING_CLARIFICATION
     test_cases: list[TestCaseOut] | None = None      # present when COMPLETE
     traceability: TraceabilityOut | None = None      # present when COMPLETE
+    review_report: ReviewReportOut | None = None        # present when COMPLETE
