@@ -101,6 +101,34 @@ Significant design decisions, trade-offs, and deferred improvements.
 
 ---
 
+## ReviewAgent is deterministic, not LLM-based
+
+**Decision:** `ReviewAgent` (`agents/review_agent.py`) does not extend `BaseAgent`. It calls no LLM. It delegates entirely to `ReviewReport.build()` — a pure classmethod on the model. The review result is `ReviewReport | None` in `QAState`, populated after `generate` in a dedicated `review` node.
+
+**Why:** All checks in the MVP review are computable from existing data: gap detection from `TraceabilityMatrix.gaps`, hallucinated links from comparing `linked_criteria` against `StructuredRequirement.acceptance_criteria`, duplicate titles via a seen-set, malformed tests via field presence. Delegating any of these to the LLM would trade determinism for no accuracy gain — the data to make these judgments is already structured and typed.
+
+**Why `ReviewReport.build()` lives on the model, not the agent:** `TraceabilityMatrix.build()` set this precedent. Deterministic aggregations over typed models are pure functions — they belong as classmethods on the output model, not buried in agent logic. This keeps them testable without any agent or graph machinery.
+
+**Why `ReviewAgent` is a class, not a free function:** Consistency with the node call pattern (`_reviewer.run(session)`). When LLM-backed review checks are added, extending `ReviewAgent` to a proper `BaseAgent` subclass is the natural upgrade path — the node code does not change.
+
+**Trade-off:** `ReviewAgent` looks like a peer of `RequirementsAnalyst` but is structurally different. This is documented in `CLAUDE.md` to prevent future confusion.
+
+**Advisory gate:** The `review` node wraps `_reviewer.run(session)` in a try/except. A crash in review must not lock the session — after `clarify` commits `clarification_complete=True` to the checkpoint, any unhandled exception in a subsequent node would make every future `submit_answers` call raise HTTP 409. The try/except ensures the graph always reaches END with `review_report=None` on failure.
+
+---
+
+## LangGraph Command(resume={}) empty-dict workaround
+
+**Decision:** `POST /sessions/{id}/answers` wraps the answers dict before resuming: `Command(resume={"answers": body.answers})`. The `collect_answers` node unwraps it: `result.get("answers", {})`.
+
+**Why:** LangGraph 1.2.2 classifies a resume value as a "resume-map" (keyed by interrupt IDs) when `isinstance(resume, dict) and all(is_xxh3_128_hexdigest(k) for k in resume)`. Python's `all()` over an empty iterable returns `True` (vacuous truth), so `Command(resume={})` is silently treated as an empty resume-map. The `interrupt()` call re-fires instead of returning `{}`, causing the session to remain stuck at `awaiting_clarification`.
+
+**Fix depth:** The wrapper is the minimal fix that does not require patching LangGraph internals. The key `"answers"` is not an xxh3 hash, so `resume_is_map` evaluates to `False` for any answers dict including an empty one.
+
+**Invariant:** `collect_answers` always expects `result` to be `{"answers": dict[str, str]}`. Any caller that bypasses the HTTP layer and resumes the graph directly must use the same shape.
+
+---
+
 ## SessionStore is a set, not a map
 
 **Decision:** `api/session_store.py` stores only session UUIDs in a `set[str]`. It does not store session data.

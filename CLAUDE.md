@@ -22,8 +22,9 @@ api/app.py (FastAPI)
         ├── workflow/nodes.py: analyze    → agents/requirements_analyst.py
         ├── workflow/nodes.py: clarify    → agents/clarification_agent.py
         ├── workflow/nodes.py: collect_answers  (LangGraph interrupt/resume)
-        └── workflow/nodes.py: generate   → agents/test_case_generator.py
-              └── services/claude_client.py → Anthropic SDK
+        ├── workflow/nodes.py: generate   → agents/test_case_generator.py
+        │     └── services/claude_client.py → Anthropic SDK
+        └── workflow/nodes.py: review     → agents/review_agent.py (deterministic)
 ```
 
 | Layer | Location | Responsibility |
@@ -54,6 +55,7 @@ class QAState(TypedDict):
     pending_answers: dict[str, str]   # question id → answer text, set by interrupt
     test_cases: list[TestCase]
     traceability_matrix: TraceabilityMatrix | None
+    review_report: ReviewReport | None
 ```
 
 `clarification_rounds` uses an `operator.add` reducer — nodes return only the new round in a list and LangGraph appends it to the existing list automatically.
@@ -61,6 +63,8 @@ class QAState(TypedDict):
 ### `Session` (`orchestrator/session.py`)
 
 A local bridge dataclass constructed inside each node to pass data into agents without changing the agent interface. Nodes build it from `QAState`, call `agent.run(session)`, then extract results back out into a return dict. It is never persisted — LangGraph state is the source of truth.
+
+Fields: `raw_input`, `requirement`, `clarification_rounds`, `test_cases`, `traceability_matrix`, `review_report`.
 
 Properties: `latest_round`, `all_answered_questions` (answered only), `assumptions_made`.
 
@@ -105,11 +109,25 @@ Fields:
 
 Built via `TraceabilityMatrix.build(requirement, test_cases)`. Unknown AC IDs in `linked_criteria` are ignored (hallucination guard). `gaps` carries full objects so output can show AC text without a separate lookup.
 
+### `ReviewReport` (`models/review.py`)
+Built deterministically by `ReviewReport.build(matrix, requirement, test_cases, coverage_threshold)`. Never delegated to Claude.
+
+Fields:
+- `findings: list[ReviewFinding]` — all detected issues
+- `error_count: int` — computed property; count of ERROR-severity findings
+- `passed: bool` — computed property; `True` when `error_count == 0`
+
+`ReviewFinding` fields: `category: FindingCategory`, `severity: Severity`, `message: str`, `criterion_ids: list[str]`, `test_case_ids: list[str]`, `source: Literal["deterministic", "llm"]`.
+
+**Finding categories:** `COVERAGE_GAP` (AC not covered by any TC — ERROR), `LOW_COVERAGE` (coverage below `COVERAGE_WARN_THRESHOLD` — WARNING), `ORPHAN_TEST` (TC not linked to any valid AC — WARNING), `HALLUCINATED_LINK` (TC linked to some non-existent ACs — WARNING), `MISSING_TEST_TYPE` (no NEGATIVE or EDGE_CASE tests — WARNING), `DUPLICATE_TEST` (duplicate title — WARNING), `MALFORMED_TEST` (missing steps or expected_outcome — ERROR).
+
+The review is **advisory** — a non-zero `error_count` does not block the pipeline. `passed=False` is surfaced in the API response for human review.
+
 ---
 
 ## Workflow: clarification loop and stopping logic
 
-The graph flow is: `analyze → clarify → [collect_answers → clarify]* → generate`.
+The graph flow is: `analyze → clarify → [collect_answers → clarify]* → generate → review → END`.
 
 The `clarify` node (`workflow/nodes.py`) sets `clarification_complete` based on these conditions (in order):
 1. `not session.latest_round.questions` → no gaps found, stop
@@ -118,11 +136,13 @@ The `clarify` node (`workflow/nodes.py`) sets `clarification_complete` based on 
 
 The `route_after_clarification` function in `workflow/graph.py` reads `clarification_complete` to route to either `collect_answers` (interrupt) or `generate`.
 
-The `collect_answers` node calls `interrupt(...)`, which pauses the graph and returns control to the HTTP layer. The API sends a response with `status: awaiting_clarification`. When `POST /sessions/{id}/answers` is called, `Command(resume=answers)` resumes the graph.
+The `collect_answers` node calls `interrupt(...)`, which pauses the graph and returns control to the HTTP layer. The API sends a response with `status: awaiting_clarification`. When `POST /sessions/{id}/answers` is called, `Command(resume={"answers": answers})` resumes the graph. The answers dict is wrapped in `{"answers": ...}` to work around a LangGraph 1.2.2 bug where an empty dict is misclassified as a resume-map (see `.docs/architecture.md`).
 
 `_resolve_assumptions` in `nodes.py` auto-fills `answer = assumption` for all `ASSUMABLE` questions after each clarification run. Only `BLOCKING` and `CLARIFYING` questions are surfaced to the user.
 
 After `generate`: `TraceabilityMatrix.build(session.requirement, session.test_cases)` is called in the node and stored in `QAState.traceability_matrix`.
+
+After `generate`: the `review` node runs `ReviewAgent`, which calls `ReviewReport.build(...)` deterministically. The review is non-blocking — if it crashes, the graph completes with `review_report=None` rather than locking the session. `ReviewReport` is stored in `QAState.review_report`.
 
 ---
 
@@ -144,7 +164,9 @@ class BaseAgent(ABC):
 
 Agents are stateless. All context comes in via `session`; all output goes back onto `session`. Never store state on agent instances.
 
-**To add a new agent:**
+**Exception — deterministic agents:** `ReviewAgent` (`agents/review_agent.py`) does not extend `BaseAgent` because it makes no LLM call and requires no prompt file. It is a thin wrapper around `ReviewReport.build()`. This is the correct pattern for pipeline stages that are fully deterministic — do not force a fake `prompt_file` just to satisfy the base class. Future LLM-backed review logic should extend `BaseAgent` at that point.
+
+**To add a new LLM agent:**
 1. Create `agents/my_agent.py` extending `BaseAgent`
 2. Set `prompt_file = "my_prompt.md"`
 3. Implement `run(session: Session) -> None`
@@ -188,6 +210,8 @@ Templates live in `prompts/*.md`. They use Python's `.format(**kwargs)` for vari
 
 **Stateless agents.** Agents must not store instance state between calls. If an agent needs data from a previous step, it reads it from `session`.
 
+**Deterministic review.** `ReviewReport` must always be built from structured data (`TraceabilityMatrix`, `StructuredRequirement`, `TestCase` fields). Do not delegate any finding category to Claude. The review gate is advisory — it surfaces findings but does not block test case delivery.
+
 **Prompt files over inline strings.** Prompt text belongs in `prompts/*.md`, not in agent `run()` methods. This keeps prompt iteration decoupled from code changes.
 
 ---
@@ -195,7 +219,6 @@ Templates live in `prompts/*.md`. They use Python's `.format(**kwargs)` for vari
 ## What is not yet implemented
 
 - `generators/playwright_generator.py` — stub only; raises `NotImplementedError`
-- Test case review layer — a validation agent to detect gaps in the generated suite
 
 Do not implement these unless explicitly asked.
 
@@ -210,6 +233,7 @@ Do not implement these unless explicitly asked.
 | `DEFAULT_MODEL` | `claude-sonnet-4-6` | Used by all agents unless overridden |
 | `MAX_CLARIFICATION_ROUNDS` | `3` | Hard cap; tune in config, not in nodes |
 | `SCORE_THRESHOLD` | `0.85` | Minimum completeness score to stop clarification; used in `clarify` node |
+| `COVERAGE_WARN_THRESHOLD` | `90.0` | Minimum coverage % before LOW_COVERAGE finding is raised; passed to `ReviewReport.build()` by `ReviewAgent` |
 | `PROMPTS_DIR` | `Path(__file__).parent / "prompts"` | Absolute, relative to config.py |
 
 Penalty weights live in `ClarificationRound.completeness_score` in `models/clarification.py`.
@@ -222,7 +246,7 @@ Penalty weights live in `ClarificationRound.completeness_score` in `models/clari
 CLAUDE.md                    ← this file (public, tracked)
 CLAUDE.local.md              ← local session context (git-ignored)
 .docs/architecture.md        ← architecture decisions (git-ignored, in progress)
-config.py                    ← DEFAULT_MODEL, MAX_CLARIFICATION_ROUNDS, SCORE_THRESHOLD
+config.py                    ← DEFAULT_MODEL, MAX_CLARIFICATION_ROUNDS, SCORE_THRESHOLD, COVERAGE_WARN_THRESHOLD
 main.py                      ← legacy CLI entry point (kept for reference)
 requirements.txt
 api/
@@ -233,7 +257,7 @@ api/
     sessions.py              ← POST /sessions, POST /sessions/{id}/answers
 workflow/
   state.py                   ← QAState TypedDict with operator.add reducer
-  nodes.py                   ← analyze, clarify, collect_answers, generate node functions
+  nodes.py                   ← analyze, clarify, collect_answers, generate, review node functions
   graph.py                   ← StateGraph wiring, MemorySaver checkpointer
 models/
   __init__.py
@@ -241,6 +265,7 @@ models/
   clarification.py           ← ClarificationQuestion, ClarificationRound, QuestionTier
   test_case.py               ← TestCase, TestStep, Priority, TestCaseType
   traceability.py            ← TraceabilityMatrix
+  review.py                  ← ReviewReport, ReviewFinding, Severity, FindingCategory
 orchestrator/
   session.py                 ← Session dataclass (node-to-agent bridge)
   pipeline.py                ← legacy CLI pipeline (kept for reference)
@@ -249,6 +274,7 @@ agents/
   requirements_analyst.py
   clarification_agent.py
   test_case_generator.py
+  review_agent.py            ← deterministic; does not extend BaseAgent (no LLM call)
 prompts/
   requirements_analysis.md
   clarification.md

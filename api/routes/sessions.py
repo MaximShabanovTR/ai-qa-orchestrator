@@ -7,6 +7,8 @@ from api.schemas import (
     CreateSessionRequest,
     QuestionOut,
     RequirementOut,
+    ReviewFindingOut,
+    ReviewReportOut,
     SessionResponse,
     SessionStatus,
     SubmitAnswersRequest,
@@ -99,6 +101,24 @@ def _traceability_out(traceability_matrix) -> TraceabilityOut:
         coverage_pct=traceability_matrix.coverage_pct,
     )
 
+def _review_out(review_report) -> ReviewReportOut:
+    return ReviewReportOut(
+        findings=[
+            ReviewFindingOut(
+                category=f.category.value,
+                severity=f.severity.value,
+                message=f.message,
+                criterion_ids=f.criterion_ids,
+                test_case_ids=f.test_case_ids,
+                source=f.source,
+            )
+            for f in review_report.findings
+        ],
+        error_count=review_report.error_count,
+        passed=review_report.passed,
+    )
+
+
 
 def _build_response(session_id: str, state) -> SessionResponse:
     req = state.values.get("requirement")
@@ -116,6 +136,7 @@ def _build_response(session_id: str, state) -> SessionResponse:
             requirement=_requirement_out(req) if req else None,
             test_cases=_test_cases_out(state.values.get("test_cases", [])),
             traceability=_traceability_out(tm) if (tm := state.values["traceability_matrix"]) else None,
+            review_report=_review_out(state.values.get("review_report")) if state.values.get("review_report") else None,
         )
 
 
@@ -139,6 +160,7 @@ def create_session(body: CreateSessionRequest, request: Request):
                 "pending_answers": {},
                 "test_cases": [],
                 "traceability_matrix": None,
+                "review_report": None,
             },
             config=config,
         )
@@ -157,10 +179,15 @@ def submit_answers(session_id: str, body: SubmitAnswersRequest, request: Request
     _require_session(request, session_id)
     config = {"configurable": {"thread_id": session_id}}
     _session_complete_check(request, config)
+    
     try:
-        request.app.state.graph.invoke(Command(resume=body.answers), config=config)
+        # Wrap answers so Command(resume={}) is never passed bare —
+        # LangGraph treats any empty dict as an empty resume-map via vacuous all().
+        request.app.state.graph.invoke(Command(resume={"answers": body.answers}), config=config)
     except AgentError as e:
         raise HTTPException(status_code=422, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}")
     
     state = request.app.state.graph.get_state(config)
 
