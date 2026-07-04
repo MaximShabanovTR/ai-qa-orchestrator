@@ -22,6 +22,10 @@ class FindingCategory(str, Enum):
     MISSING_TEST_TYPE = "missing_test_type"
     DUPLICATE_TEST = "duplicate_test"
     MALFORMED_TEST = "malformed_test"
+    WEAK_STEP = "weak_step"
+    MISLINKED = "mislinked"
+    SEMANTIC_GAP = "semantic_gap"
+    SEMANTIC_DUPLICATE = "semantic_duplicate"
 
 
 class ReviewFinding(BaseModel):
@@ -67,7 +71,7 @@ class ReviewReport(BaseModel):
                 )
                 for ac in matrix.gaps
             )
-        if matrix.coverage_pct < coverage_threshold:
+        if not matrix.gaps and matrix.coverage_pct < coverage_threshold:
             findings.append(
                 ReviewFinding(
                     category=FindingCategory.LOW_COVERAGE,
@@ -132,22 +136,23 @@ class ReviewReport(BaseModel):
                     )
                 )
             seen_titles.add(tc.title.strip().lower())
-        if not any(tc.type == TestCaseType.NEGATIVE for tc in test_cases):
-            findings.append(
-                ReviewFinding(
-                    category=FindingCategory.MISSING_TEST_TYPE,
-                    severity=Severity.WARNING,
-                    message="No negative test cases found.",
-                    source="deterministic",
+        if test_cases:
+            if not any(tc.type == TestCaseType.NEGATIVE for tc in test_cases):
+                findings.append(
+                    ReviewFinding(
+                        category=FindingCategory.MISSING_TEST_TYPE,
+                        severity=Severity.WARNING,
+                        message="No negative test cases found.",
+                        source="deterministic",
+                    )
                 )
-            )
-        if not any(tc.type == TestCaseType.EDGE_CASE for tc in test_cases):
-            findings.append(
-                ReviewFinding(
-                    category=FindingCategory.MISSING_TEST_TYPE,
-                    severity=Severity.WARNING,
-                    message="No edge case test cases found.",
-                    source="deterministic",
+            if not any(tc.type == TestCaseType.EDGE_CASE for tc in test_cases):
+                findings.append(
+                    ReviewFinding(
+                        category=FindingCategory.MISSING_TEST_TYPE,
+                        severity=Severity.WARNING,
+                        message="No edge case test cases found.",
+                        source="deterministic",
+                    )
                 )
-            )
         return ReviewReport(findings=findings)

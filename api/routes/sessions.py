@@ -122,7 +122,7 @@ def _review_out(review_report) -> ReviewReportOut:
 
 def _build_response(session_id: str, state) -> SessionResponse:
     req = state.values.get("requirement")
-    if state.values.get("clarification_complete") is False:
+    if not state.values.get("clarification_complete", True):
         return SessionResponse(
             session_id=session_id,
             status=SessionStatus.AWAITING_CLARIFICATION,   

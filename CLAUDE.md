@@ -119,7 +119,9 @@ Fields:
 
 `ReviewFinding` fields: `category: FindingCategory`, `severity: Severity`, `message: str`, `criterion_ids: list[str]`, `test_case_ids: list[str]`, `source: Literal["deterministic", "llm"]`.
 
-**Finding categories:** `COVERAGE_GAP` (AC not covered by any TC — ERROR), `LOW_COVERAGE` (coverage below `COVERAGE_WARN_THRESHOLD` — WARNING), `ORPHAN_TEST` (TC not linked to any valid AC — WARNING), `HALLUCINATED_LINK` (TC linked to some non-existent ACs — WARNING), `MISSING_TEST_TYPE` (no NEGATIVE or EDGE_CASE tests — WARNING), `DUPLICATE_TEST` (duplicate title — WARNING), `MALFORMED_TEST` (missing steps or expected_outcome — ERROR).
+**Finding categories — deterministic:** `COVERAGE_GAP` (AC not covered by any TC — ERROR), `LOW_COVERAGE` (coverage below `COVERAGE_WARN_THRESHOLD` — WARNING), `ORPHAN_TEST` (TC not linked to any valid AC — WARNING), `HALLUCINATED_LINK` (TC linked to some non-existent ACs — WARNING), `MISSING_TEST_TYPE` (no NEGATIVE or EDGE_CASE tests — WARNING), `DUPLICATE_TEST` (duplicate title — WARNING), `MALFORMED_TEST` (missing steps or expected_outcome — ERROR).
+
+**Finding categories — LLM (semantic):** `WEAK_STEP` (vague/untestable step — WARNING), `MISLINKED` (steps don't test the claimed AC — ERROR), `SEMANTIC_GAP` (expected scenario missing from suite — ERROR), `SEMANTIC_DUPLICATE` (same intent, different wording — WARNING).
 
 The review is **advisory** — a non-zero `error_count` does not block the pipeline. `passed=False` is surfaced in the API response for human review.
 
@@ -142,7 +144,12 @@ The `collect_answers` node calls `interrupt(...)`, which pauses the graph and re
 
 After `generate`: `TraceabilityMatrix.build(session.requirement, session.test_cases)` is called in the node and stored in `QAState.traceability_matrix`.
 
-After `generate`: the `review` node runs `ReviewAgent`, which calls `ReviewReport.build(...)` deterministically. The review is non-blocking — if it crashes, the graph completes with `review_report=None` rather than locking the session. `ReviewReport` is stored in `QAState.review_report`.
+After `generate`: the `review` node runs `ReviewAgent`, which:
+1. Calls `ReviewReport.build(...)` for all deterministic findings
+2. Makes an LLM call via `prompts/review.md` for semantic findings (`WEAK_STEP`, `MISLINKED`, `SEMANTIC_GAP`, `SEMANTIC_DUPLICATE`)
+3. Merges both finding lists into the same `ReviewReport`
+
+The review is non-blocking — if it crashes, the graph completes with `review_report=None` rather than locking the session. `ReviewReport` is stored in `QAState.review_report`.
 
 ---
 
@@ -164,7 +171,7 @@ class BaseAgent(ABC):
 
 Agents are stateless. All context comes in via `session`; all output goes back onto `session`. Never store state on agent instances.
 
-**Exception — deterministic agents:** `ReviewAgent` (`agents/review_agent.py`) does not extend `BaseAgent` because it makes no LLM call and requires no prompt file. It is a thin wrapper around `ReviewReport.build()`. This is the correct pattern for pipeline stages that are fully deterministic — do not force a fake `prompt_file` just to satisfy the base class. Future LLM-backed review logic should extend `BaseAgent` at that point.
+**Note on `ReviewAgent`:** It extends `BaseAgent` and uses `prompts/review.md` for its LLM semantic checks. It also calls `ReviewReport.build()` for deterministic checks before the LLM call — so it does both. The deterministic findings survive even if the LLM call fails.
 
 **To add a new LLM agent:**
 1. Create `agents/my_agent.py` extending `BaseAgent`
@@ -274,11 +281,12 @@ agents/
   requirements_analyst.py
   clarification_agent.py
   test_case_generator.py
-  review_agent.py            ← deterministic; does not extend BaseAgent (no LLM call)
+  review_agent.py            ← extends BaseAgent; deterministic checks + LLM semantic checks
 prompts/
   requirements_analysis.md
   clarification.md
   test_case_generation.md
+  review.md                  ← LLM semantic review (weak steps, mislinks, gaps, duplicates)
 services/
   claude_client.py
   output_writer.py

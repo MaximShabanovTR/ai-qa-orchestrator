@@ -85,6 +85,8 @@ def generate(state: QAState) -> dict:
     }
 
 def review(state: QAState) -> dict:
+    if not state["traceability_matrix"] or not state["requirement"]:
+        return {"review_report": None}
     session = Session(
         raw_input=state["raw_input"],
         requirement=state["requirement"],
