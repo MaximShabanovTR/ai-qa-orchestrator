@@ -316,8 +316,8 @@ generators/
   base_generator.py
   playwright_generator.py    ← stub
 tests/
-  unit/                      ← fast, no I/O (TraceabilityMatrix, pipeline logic, etc.)
-  contract/                  ← mocked LLM, schema validation
+  unit/                      ← fast, no I/O (TraceabilityMatrix, PlannerDecision, review _check_* methods, etc.)
+  contract/                  ← mocked LLM, schema validation, remediation loop end-to-end
   smoke/                     ← real LLM, schema-only assertions
   evals/                     ← real LLM, quality rubric
 output/                      ← generated files (git-ignored)

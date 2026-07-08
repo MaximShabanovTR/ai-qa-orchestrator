@@ -129,76 +129,36 @@ Significant design decisions, trade-offs, and deferred improvements.
 
 ---
 
-## Stage 3 — Remediation loop with deterministic planner
+## Remediation loop with deterministic planner
 
-### What it is
+**Decision:** After `generate`, the graph runs `review → plan → route_after_plan → { generate | END }` in a bounded loop. The `plan` node calls `PlannerDecision.from_report()` to decide whether to retry. `ReviewReport.build()` was refactored into six focused `_check_*` classmethods so each invariant is independently testable.
 
-A bounded `generate → review → plan → generate` loop that retries test generation when the review gate fails. Fully automated — no human step, unlike the clarification loop.
-
-### Graph shape
-
+**Graph shape:**
 ```
-Before (Stage 2):  generate → review → END
-After  (Stage 3):  generate → review → plan → route_after_plan → { generate | END }
+generate → review → plan → route_after_plan → { generate (retry) | END }
 ```
 
-### Implementation status
+**Why `PlannerDecision` instead of a route function:** A bare `route_after_plan` function would be anonymous and untestable. `PlannerDecision.from_report()` is a pure classmethod — the same pattern as `TraceabilityMatrix.build()` and `ReviewReport.build()`. It is testable without graph machinery, and its `reason` field makes the stopping condition observable in the API response. When the planner eventually needs LLM input, the `plan` node upgrades to a `BaseAgent` subclass without changing the graph wiring.
 
-**Part A — `models/review.py` refactor** ✅ committed (ad8f082)
-`ReviewReport.build()` is now a composition of 6 focused `_check_*` classmethods:
-`_check_coverage_gaps`, `_check_low_coverage`, `_check_link_validity` (orphan + hallucinated), `_check_malformed`, `_check_duplicate_titles`, `_check_missing_types`. No behavior change.
+**`PlannerDecision.from_report()` decision order** (checked in sequence — mirrors the clarify node stopping logic):
+1. `report is None` → `DONE("review_unavailable")` — never loop on a crashed review
+2. `report.passed` → `DONE("passed")`
+3. `review_rounds >= MAX_REVIEW_ROUNDS` → `DONE("max_rounds_reached")`
+4. otherwise → `REGENERATE_ALL(first_error.category.value)`
 
-**Part B — `models/planning.py`** ✅
-```python
-class RemediationAction(str, Enum):
-    DONE = "done"
-    REGENERATE_ALL = "regenerate_all"
+**Why `review_rounds` is incremented in `plan`, not `review`:** The `plan` node is the only place that knows a regeneration is about to happen. Incrementing in `review` would count reviews run; incrementing in `plan` counts regenerations triggered — which is the correct semantics for the cap check.
 
-class PlannerDecision(BaseModel):
-    action: RemediationAction
-    reason: str
+**Why node is named `plan` not `planner`:** All nodes use the verb form of their action: `analyze`, `clarify`, `generate`, `review`. `plan` is consistent with this convention.
 
-    @classmethod
-    def from_report(cls, report, review_rounds, max_rounds) -> PlannerDecision: ...
-```
-Decision order: `report is None → DONE("review_unavailable")` → `passed → DONE("passed")` → `rounds >= max → DONE("max_rounds_reached")` → `REGENERATE_ALL(first_error.category.value)`.
+**Generator feedback on retry:** `generate` passes `session.review_report` into `TestCaseGenerator`. `_format_review_feedback()` returns `""` on first pass (no prior review) and a formatted ERROR+WARNING findings block on retry. The `{review_feedback}` placeholder in `prompts/test_case_generation.md` receives this — empty string renders as nothing; populated string tells Claude exactly what to fix.
 
-**Part C — Config** ✅
-`MAX_REVIEW_ROUNDS: int = 2` added to `config.py`.
+**Why include WARNING findings in retry feedback, not just ERRORs:** The full suite is regenerated on retry. Giving Claude the complete picture (errors that blocked + warnings that degraded quality) costs nothing extra and produces a better second attempt.
 
-**Part D — State** ✅
-`review_rounds: int` and `planner_decision: PlannerDecision | None` added to `QAState`. Both initialized in `create_session` (`review_rounds=0`, `planner_decision=None`).
+**`ReviewReport._check_*` refactor:** `ReviewReport.build()` was decomposed into six `_check_*` classmethods so each deterministic invariant can be unit-tested in isolation — no graph, no LLM, no fixtures beyond typed data. This is the same motivation as keeping `TraceabilityMatrix.build()` on the model rather than in an agent.
 
-**Part E — `plan` node** ✅
-Calls `PlannerDecision.from_report(...)`, returns `planner_decision` and increments `review_rounds` only when action is `REGENERATE_ALL`. Node name is `plan` (consistent with verb-action naming: analyze, clarify, generate, review, plan).
-
-**Part G — Graph rewiring** ✅
-`review → plan → route_after_plan → { generate | END }`. `route_after_plan` reads `state["planner_decision"].action`.
-
----
-
-**Part F — Generator gets findings as context** 🔲 IN PROGRESS
-Three changes needed:
-1. `generate` node passes `state["review_report"]` into `Session`
-2. `TestCaseGenerator.run()` serializes `session.review_report` findings and injects into `_load_prompt()`
-3. `prompts/test_case_generation.md` gets a `{review_feedback}` block — empty string on first pass, ERROR findings JSON on retry
-
-On first pass: `review_report` in state is `None` → `review_feedback = ""`.
-On retry: `review_report` has ERROR findings → serialize and inject so Claude knows what to fix.
-
-**Part H — API + docs** 🔲 TODO
-- Update `CLAUDE.md` (workflow diagram, state fields, new model, graph shape)
-- Update `.docs/architecture.md` "ReviewAgent is deterministic" entry (outdated since Stage 2)
-- Optionally surface `review_rounds` / `planner_decision` in `SessionResponse`
-
-**Part I — Unit tests** 🔲 TODO
-`PlannerDecision.from_report` (all four branches) and the `_check_*` methods — all pure, no LLM, no graph.
-
-### Why `plan` not `planner` as the node name
-All nodes use the verb form of their action: `analyze`, `clarify`, `generate`, `review`. `plan` is consistent with this convention. The Python function is named `plan`; the LangGraph node string is `"plan"`.
-
-### Why a dedicated `plan` node instead of embedding logic in the route function
-The route function is anonymous and untestable. A named `plan` node with a typed `PlannerDecision` output gives the same pattern as `TraceabilityMatrix.build()` and `ReviewReport.build()` — a pure classmethod testable without graph machinery. When the planner eventually needs LLM input, the node upgrades to a `BaseAgent` subclass without changing the graph wiring.
+**Future remediation actions beyond MVP:**
+- `REGENERATE_MISSING` — regenerate only test cases for uncovered ACs (requires partial-suite merge logic in generator)
+- `REWRITE_TEST_CASES` — targeted rewrite of specific failing cases (requires new agent)
 
 
 ---
