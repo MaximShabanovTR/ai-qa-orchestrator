@@ -8,3 +8,6 @@ __pycache__/
 output/
 .vscode/
 _e2e_driver.py
+server.log
+server.err
+.claude/settings.local.json
