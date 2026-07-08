@@ -32,7 +32,8 @@ class ReviewAgent(BaseAgent):
         )
         try:
             data = self._parse_json(raw_response)
-            session.review_report.findings.extend(ReviewFinding.model_validate(item) for item in data)
+            semantic_findings = [ReviewFinding.model_validate(item) for item in data]
+            session.review_report.findings.extend(semantic_findings)
         except json.JSONDecodeError as e:
             raise AgentError(f"ReviewAgent: response was not valid JSON — {e}")
         except (KeyError, TypeError) as e:
