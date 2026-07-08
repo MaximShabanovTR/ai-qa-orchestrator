@@ -2,6 +2,7 @@ import operator
 from typing import Annotated, TypedDict
 
 from models.clarification import ClarificationRound
+from models.planning import PlannerDecision
 from models.requirement import StructuredRequirement
 from models.review import ReviewReport
 from models.test_case import TestCase
@@ -17,3 +18,5 @@ class QAState(TypedDict):
     test_cases: list[TestCase]
     traceability_matrix: TraceabilityMatrix | None
     review_report: ReviewReport | None
+    review_rounds: int
+    planner_decision: PlannerDecision | None

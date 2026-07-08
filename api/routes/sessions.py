@@ -122,7 +122,7 @@ def _review_out(review_report) -> ReviewReportOut:
 
 def _build_response(session_id: str, state) -> SessionResponse:
     req = state.values.get("requirement")
-    if state.values.get("clarification_complete") is False:
+    if not state.values.get("clarification_complete", True):
         return SessionResponse(
             session_id=session_id,
             status=SessionStatus.AWAITING_CLARIFICATION,   
@@ -137,6 +137,7 @@ def _build_response(session_id: str, state) -> SessionResponse:
             test_cases=_test_cases_out(state.values.get("test_cases", [])),
             traceability=_traceability_out(tm) if (tm := state.values["traceability_matrix"]) else None,
             review_report=_review_out(state.values.get("review_report")) if state.values.get("review_report") else None,
+            review_rounds=state.values.get("review_rounds"),
         )
 
 
@@ -161,6 +162,8 @@ def create_session(body: CreateSessionRequest, request: Request):
                 "test_cases": [],
                 "traceability_matrix": None,
                 "review_report": None,
+                "review_rounds": 0,
+                "planner_decision": None,
             },
             config=config,
         )
@@ -181,8 +184,6 @@ def submit_answers(session_id: str, body: SubmitAnswersRequest, request: Request
     _session_complete_check(request, config)
     
     try:
-        # Wrap answers so Command(resume={}) is never passed bare —
-        # LangGraph treats any empty dict as an empty resume-map via vacuous all().
         request.app.state.graph.invoke(Command(resume={"answers": body.answers}), config=config)
     except AgentError as e:
         raise HTTPException(status_code=422, detail=str(e))

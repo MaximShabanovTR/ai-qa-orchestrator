@@ -24,7 +24,8 @@ api/app.py (FastAPI)
         ├── workflow/nodes.py: collect_answers  (LangGraph interrupt/resume)
         ├── workflow/nodes.py: generate   → agents/test_case_generator.py
         │     └── services/claude_client.py → Anthropic SDK
-        └── workflow/nodes.py: review     → agents/review_agent.py (deterministic)
+        ├── workflow/nodes.py: review     → agents/review_agent.py (deterministic + LLM)
+        └── workflow/nodes.py: plan       → models/planning.py PlannerDecision (deterministic)
 ```
 
 | Layer | Location | Responsibility |
@@ -56,6 +57,8 @@ class QAState(TypedDict):
     test_cases: list[TestCase]
     traceability_matrix: TraceabilityMatrix | None
     review_report: ReviewReport | None
+    review_rounds: int                 # incremented by plan node each time REGENERATE_ALL fires
+    planner_decision: PlannerDecision | None
 ```
 
 `clarification_rounds` uses an `operator.add` reducer — nodes return only the new round in a list and LangGraph appends it to the existing list automatically.
@@ -119,15 +122,30 @@ Fields:
 
 `ReviewFinding` fields: `category: FindingCategory`, `severity: Severity`, `message: str`, `criterion_ids: list[str]`, `test_case_ids: list[str]`, `source: Literal["deterministic", "llm"]`.
 
-**Finding categories:** `COVERAGE_GAP` (AC not covered by any TC — ERROR), `LOW_COVERAGE` (coverage below `COVERAGE_WARN_THRESHOLD` — WARNING), `ORPHAN_TEST` (TC not linked to any valid AC — WARNING), `HALLUCINATED_LINK` (TC linked to some non-existent ACs — WARNING), `MISSING_TEST_TYPE` (no NEGATIVE or EDGE_CASE tests — WARNING), `DUPLICATE_TEST` (duplicate title — WARNING), `MALFORMED_TEST` (missing steps or expected_outcome — ERROR).
+**Finding categories — deterministic:** `COVERAGE_GAP` (AC not covered by any TC — ERROR), `LOW_COVERAGE` (coverage below `COVERAGE_WARN_THRESHOLD` — WARNING), `ORPHAN_TEST` (TC not linked to any valid AC — WARNING), `HALLUCINATED_LINK` (TC linked to some non-existent ACs — WARNING), `MISSING_TEST_TYPE` (no NEGATIVE or EDGE_CASE tests — WARNING), `DUPLICATE_TEST` (duplicate title — WARNING), `MALFORMED_TEST` (missing steps or expected_outcome — ERROR).
+
+**Finding categories — LLM (semantic):** `WEAK_STEP` (vague/untestable step — WARNING), `MISLINKED` (steps don't test the claimed AC — ERROR), `SEMANTIC_GAP` (expected scenario missing from suite — ERROR), `SEMANTIC_DUPLICATE` (same intent, different wording — WARNING).
 
 The review is **advisory** — a non-zero `error_count` does not block the pipeline. `passed=False` is surfaced in the API response for human review.
+
+### `PlannerDecision` (`models/planning.py`)
+Built deterministically by `PlannerDecision.from_report(report, review_rounds, max_rounds)`. Never delegated to Claude.
+
+Fields: `action: RemediationAction`, `reason: str`.
+
+`RemediationAction` enum: `DONE` | `REGENERATE_ALL`.
+
+Decision logic (checked in order):
+1. `report is None` → `DONE("review_unavailable")` — never loop on a crashed review
+2. `report.passed` → `DONE("passed")`
+3. `review_rounds >= MAX_REVIEW_ROUNDS` → `DONE("max_rounds_reached")`
+4. otherwise → `REGENERATE_ALL(first_error.category.value)`
 
 ---
 
 ## Workflow: clarification loop and stopping logic
 
-The graph flow is: `analyze → clarify → [collect_answers → clarify]* → generate → review → END`.
+The graph flow is: `analyze → clarify → [collect_answers → clarify]* → generate → review → plan → [generate → review → plan]* → END`.
 
 The `clarify` node (`workflow/nodes.py`) sets `clarification_complete` based on these conditions (in order):
 1. `not session.latest_round.questions` → no gaps found, stop
@@ -142,7 +160,14 @@ The `collect_answers` node calls `interrupt(...)`, which pauses the graph and re
 
 After `generate`: `TraceabilityMatrix.build(session.requirement, session.test_cases)` is called in the node and stored in `QAState.traceability_matrix`.
 
-After `generate`: the `review` node runs `ReviewAgent`, which calls `ReviewReport.build(...)` deterministically. The review is non-blocking — if it crashes, the graph completes with `review_report=None` rather than locking the session. `ReviewReport` is stored in `QAState.review_report`.
+After `generate`: the `review` node runs `ReviewAgent`, which:
+1. Calls `ReviewReport.build(...)` for all deterministic findings
+2. Makes an LLM call via `prompts/review.md` for semantic findings (`WEAK_STEP`, `MISLINKED`, `SEMANTIC_GAP`, `SEMANTIC_DUPLICATE`)
+3. Merges both finding lists into the same `ReviewReport`
+
+The review is non-blocking — if it crashes, the graph completes with `review_report=None` rather than locking the session. `ReviewReport` is stored in `QAState.review_report`.
+
+After `review`: the `plan` node calls `PlannerDecision.from_report(state["review_report"], state["review_rounds"], MAX_REVIEW_ROUNDS)`. `route_after_plan` in `workflow/graph.py` reads `planner_decision.action` to route to either `generate` (retry) or `END`. `review_rounds` is incremented only when `REGENERATE_ALL` fires — it counts regenerations triggered, not reviews run. On retry, `generate` passes `session.review_report` to `TestCaseGenerator`, which serializes ERROR+WARNING findings into a `{review_feedback}` block in the prompt so Claude knows what to fix.
 
 ---
 
@@ -164,7 +189,7 @@ class BaseAgent(ABC):
 
 Agents are stateless. All context comes in via `session`; all output goes back onto `session`. Never store state on agent instances.
 
-**Exception — deterministic agents:** `ReviewAgent` (`agents/review_agent.py`) does not extend `BaseAgent` because it makes no LLM call and requires no prompt file. It is a thin wrapper around `ReviewReport.build()`. This is the correct pattern for pipeline stages that are fully deterministic — do not force a fake `prompt_file` just to satisfy the base class. Future LLM-backed review logic should extend `BaseAgent` at that point.
+**Note on `ReviewAgent`:** It extends `BaseAgent` and uses `prompts/review.md` for its LLM semantic checks. It also calls `ReviewReport.build()` for deterministic checks before the LLM call — so it does both. The deterministic findings survive even if the LLM call fails.
 
 **To add a new LLM agent:**
 1. Create `agents/my_agent.py` extending `BaseAgent`
@@ -210,7 +235,9 @@ Templates live in `prompts/*.md`. They use Python's `.format(**kwargs)` for vari
 
 **Stateless agents.** Agents must not store instance state between calls. If an agent needs data from a previous step, it reads it from `session`.
 
-**Deterministic review.** `ReviewReport` must always be built from structured data (`TraceabilityMatrix`, `StructuredRequirement`, `TestCase` fields). Do not delegate any finding category to Claude. The review gate is advisory — it surfaces findings but does not block test case delivery.
+**Deterministic structural review.** `ReviewReport.build()` and all `_check_*` classmethods must remain pure functions over structured data. Do not move structural checks (gap detection, orphan links, duplicates, malformed tests) into the LLM pass. Semantic findings (`WEAK_STEP`, `MISLINKED`, `SEMANTIC_GAP`, `SEMANTIC_DUPLICATE`) are LLM-only and live in `prompts/review.md`. The review gate is advisory — findings surface but do not block test case delivery.
+
+**Deterministic planning.** `PlannerDecision.from_report()` must remain a pure classmethod. Do not delegate the retry/stop decision to Claude — it must be auditable and consistent across runs.
 
 **Prompt files over inline strings.** Prompt text belongs in `prompts/*.md`, not in agent `run()` methods. This keeps prompt iteration decoupled from code changes.
 
@@ -232,6 +259,7 @@ Do not implement these unless explicitly asked.
 |---|---|---|
 | `DEFAULT_MODEL` | `claude-sonnet-4-6` | Used by all agents unless overridden |
 | `MAX_CLARIFICATION_ROUNDS` | `3` | Hard cap; tune in config, not in nodes |
+| `MAX_REVIEW_ROUNDS` | `2` | Max remediation retries before `plan` forces `DONE`; tune in config, not in nodes |
 | `SCORE_THRESHOLD` | `0.85` | Minimum completeness score to stop clarification; used in `clarify` node |
 | `COVERAGE_WARN_THRESHOLD` | `90.0` | Minimum coverage % before LOW_COVERAGE finding is raised; passed to `ReviewReport.build()` by `ReviewAgent` |
 | `PROMPTS_DIR` | `Path(__file__).parent / "prompts"` | Absolute, relative to config.py |
@@ -257,8 +285,8 @@ api/
     sessions.py              ← POST /sessions, POST /sessions/{id}/answers
 workflow/
   state.py                   ← QAState TypedDict with operator.add reducer
-  nodes.py                   ← analyze, clarify, collect_answers, generate, review node functions
-  graph.py                   ← StateGraph wiring, MemorySaver checkpointer
+  nodes.py                   ← analyze, clarify, collect_answers, generate, review, plan node functions
+  graph.py                   ← StateGraph wiring, MemorySaver checkpointer, route_after_plan
 models/
   __init__.py
   requirement.py             ← StructuredRequirement, AcceptanceCriterion, TestScope
@@ -266,6 +294,7 @@ models/
   test_case.py               ← TestCase, TestStep, Priority, TestCaseType
   traceability.py            ← TraceabilityMatrix
   review.py                  ← ReviewReport, ReviewFinding, Severity, FindingCategory
+  planning.py                ← PlannerDecision, RemediationAction
 orchestrator/
   session.py                 ← Session dataclass (node-to-agent bridge)
   pipeline.py                ← legacy CLI pipeline (kept for reference)
@@ -274,11 +303,12 @@ agents/
   requirements_analyst.py
   clarification_agent.py
   test_case_generator.py
-  review_agent.py            ← deterministic; does not extend BaseAgent (no LLM call)
+  review_agent.py            ← extends BaseAgent; deterministic checks + LLM semantic checks
 prompts/
   requirements_analysis.md
   clarification.md
   test_case_generation.md
+  review.md                  ← LLM semantic review (weak steps, mislinks, gaps, duplicates)
 services/
   claude_client.py
   output_writer.py
@@ -286,8 +316,8 @@ generators/
   base_generator.py
   playwright_generator.py    ← stub
 tests/
-  unit/                      ← fast, no I/O (TraceabilityMatrix, pipeline logic, etc.)
-  contract/                  ← mocked LLM, schema validation
+  unit/                      ← fast, no I/O (TraceabilityMatrix, PlannerDecision, review _check_* methods, etc.)
+  contract/                  ← mocked LLM, schema validation, remediation loop end-to-end
   smoke/                     ← real LLM, schema-only assertions
   evals/                     ← real LLM, quality rubric
 output/                      ← generated files (git-ignored)
