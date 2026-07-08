@@ -14,6 +14,7 @@ class TestCaseGenerator(BaseAgent):
             requirement_json=session.requirement.model_dump_json(indent=2),
             clarifications_json=self._format_clarifications(session),
             assumptions=self._format_assumptions(session),
+            review_feedback=self._format_review_feedback(session),
         )
         raw_response = self._call(
             system=system,
@@ -52,3 +53,19 @@ class TestCaseGenerator(BaseAgent):
         if not assumptions:
             return "None"
         return "\n".join(f"- {a}" for a in assumptions)
+
+    def _format_review_feedback(self, session: Session) -> str:
+        review_feedback = session.review_report
+        if not review_feedback or review_feedback.error_count == 0:
+            return ""
+        lines = ["PREVIOUS REVIEW - ERROR AND WARNING FINDINGS:\n"]
+        for finding in review_feedback.findings:
+            lines.append(f"- Category: {finding.category.value}")
+            lines.append(f"  Severity: {finding.severity.value}")
+            lines.append(f"  Message: {finding.message}")
+            if finding.criterion_ids:
+                lines.append(f"  Linked Criteria IDs: {', '.join(finding.criterion_ids)}")
+            if finding.test_case_ids:
+                lines.append(f"  Linked Test Case IDs: {', '.join(finding.test_case_ids)}")
+            lines.append("")  # Add a blank line between findings
+        return "\n".join(lines)

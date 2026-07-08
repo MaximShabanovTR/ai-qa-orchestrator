@@ -161,6 +161,8 @@ def create_session(body: CreateSessionRequest, request: Request):
                 "test_cases": [],
                 "traceability_matrix": None,
                 "review_report": None,
+                "review_rounds": 0,
+                "planner_decision": None,
             },
             config=config,
         )
@@ -181,8 +183,6 @@ def submit_answers(session_id: str, body: SubmitAnswersRequest, request: Request
     _session_complete_check(request, config)
     
     try:
-        # Wrap answers so Command(resume={}) is never passed bare —
-        # LangGraph treats any empty dict as an empty resume-map via vacuous all().
         request.app.state.graph.invoke(Command(resume={"answers": body.answers}), config=config)
     except AgentError as e:
         raise HTTPException(status_code=422, detail=str(e))

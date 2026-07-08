@@ -5,9 +5,10 @@ from agents.requirements_analyst import RequirementsAnalyst
 from agents.review_agent import ReviewAgent
 from agents.test_case_generator import TestCaseGenerator
 from models.clarification import QuestionTier
+from models.planning import PlannerDecision, RemediationAction
 from models.traceability import TraceabilityMatrix
 from orchestrator.session import Session
-from config import MAX_CLARIFICATION_ROUNDS, SCORE_THRESHOLD
+from config import MAX_CLARIFICATION_ROUNDS, MAX_REVIEW_ROUNDS, SCORE_THRESHOLD
 from workflow.state import QAState
 from langgraph.types import interrupt
 
@@ -32,7 +33,6 @@ def analyze(state: QAState) -> dict:
 
 def collect_answers(state: QAState) -> dict:
     result = interrupt({"questions": state["clarification_rounds"][-1].questions})
-    # result is {"answers": {...}} — unwrap to get the raw answers dict
     answers = result.get("answers", {}) if isinstance(result, dict) else {}
     return {"pending_answers": answers}
 
@@ -72,6 +72,7 @@ def generate(state: QAState) -> dict:
         raw_input=state["raw_input"],
         requirement=state["requirement"],
         clarification_rounds=copy.deepcopy(list(state["clarification_rounds"])),
+        review_report=state.get("review_report"),
     )
     _generator.run(session)
 
@@ -101,3 +102,12 @@ def review(state: QAState) -> dict:
         print(f"[review] non-fatal error: {type(e).__name__}: {e}", flush=True)
 
     return {"review_report": session.review_report}
+
+def plan(state: QAState) -> dict:
+    decision = PlannerDecision.from_report(
+        state["review_report"], state["review_rounds"], MAX_REVIEW_ROUNDS
+    )
+    return {
+        "planner_decision": decision,
+        "review_rounds": state["review_rounds"] + (1 if decision.action == RemediationAction.REGENERATE_ALL else 0),
+    }

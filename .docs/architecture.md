@@ -101,19 +101,19 @@ Significant design decisions, trade-offs, and deferred improvements.
 
 ---
 
-## ReviewAgent is deterministic, not LLM-based
+## ReviewAgent: deterministic + LLM hybrid
 
-**Decision:** `ReviewAgent` (`agents/review_agent.py`) does not extend `BaseAgent`. It calls no LLM. It delegates entirely to `ReviewReport.build()` — a pure classmethod on the model. The review result is `ReviewReport | None` in `QAState`, populated after `generate` in a dedicated `review` node.
+**Decision:** `ReviewAgent` (`agents/review_agent.py`) extends `BaseAgent` and runs two layers: (1) `ReviewReport.build()` for all structural findings — pure, deterministic, no LLM; (2) an LLM call via `prompts/review.md` for semantic findings (`WEAK_STEP`, `MISLINKED`, `SEMANTIC_GAP`, `SEMANTIC_DUPLICATE`). Both finding lists are merged into one `ReviewReport`.
 
-**Why:** All checks in the MVP review are computable from existing data: gap detection from `TraceabilityMatrix.gaps`, hallucinated links from comparing `linked_criteria` against `StructuredRequirement.acceptance_criteria`, duplicate titles via a seen-set, malformed tests via field presence. Delegating any of these to the LLM would trade determinism for no accuracy gain — the data to make these judgments is already structured and typed.
+**Why two layers:** Structural checks (coverage gaps, hallucinated links, duplicates, malformed tests) are computable from typed data — delegating them to the LLM would trade determinism for no accuracy gain. Semantic checks (vague step wording, mislinked intent, missing scenarios) require natural language understanding that structured data alone cannot surface. Each layer does what it's suited for.
 
-**Why `ReviewReport.build()` lives on the model, not the agent:** `TraceabilityMatrix.build()` set this precedent. Deterministic aggregations over typed models are pure functions — they belong as classmethods on the output model, not buried in agent logic. This keeps them testable without any agent or graph machinery.
+**Why `ReviewReport.build()` lives on the model, not the agent:** `TraceabilityMatrix.build()` set this precedent. Deterministic aggregations over typed models are pure functions — they belong as classmethods on the output model, not buried in agent logic. This keeps them testable without any agent or graph machinery. `ReviewReport.build()` was further refactored in Stage 3 (Part A) into six focused `_check_*` classmethods so each invariant is independently testable.
 
-**Why `ReviewAgent` is a class, not a free function:** Consistency with the node call pattern (`_reviewer.run(session)`). When LLM-backed review checks are added, extending `ReviewAgent` to a proper `BaseAgent` subclass is the natural upgrade path — the node code does not change.
+**Finding sources:** Every `ReviewFinding` carries a `source` field: `"deterministic"` for findings from `ReviewReport.build()`, `"llm"` for findings from the semantic LLM pass. Consumers can filter by source to distinguish structural from semantic issues.
 
-**Trade-off:** `ReviewAgent` looks like a peer of `RequirementsAnalyst` but is structurally different. This is documented in `CLAUDE.md` to prevent future confusion.
+**Resilience:** The `review` node wraps `_reviewer.run(session)` in a try/except. If the LLM call fails, deterministic findings survive (they are computed before the LLM call inside `ReviewAgent.run()`). If the entire agent crashes, the graph completes with `review_report=None` rather than locking the session at HTTP 409 forever. The review gate is advisory — a non-zero `error_count` does not block test case delivery.
 
-**Advisory gate:** The `review` node wraps `_reviewer.run(session)` in a try/except. A crash in review must not lock the session — after `clarify` commits `clarification_complete=True` to the checkpoint, any unhandled exception in a subsequent node would make every future `submit_answers` call raise HTTP 409. The try/except ensures the graph always reaches END with `review_report=None` on failure.
+**Advisory gate:** `ReviewReport.passed` is `True` when `error_count == 0`. The `plan` node reads this to decide whether to retry generation. Surfaced in the API response for human review.
 
 ---
 
@@ -126,6 +126,80 @@ Significant design decisions, trade-offs, and deferred improvements.
 **Fix depth:** The wrapper is the minimal fix that does not require patching LangGraph internals. The key `"answers"` is not an xxh3 hash, so `resume_is_map` evaluates to `False` for any answers dict including an empty one.
 
 **Invariant:** `collect_answers` always expects `result` to be `{"answers": dict[str, str]}`. Any caller that bypasses the HTTP layer and resumes the graph directly must use the same shape.
+
+---
+
+## Stage 3 — Remediation loop with deterministic planner
+
+### What it is
+
+A bounded `generate → review → plan → generate` loop that retries test generation when the review gate fails. Fully automated — no human step, unlike the clarification loop.
+
+### Graph shape
+
+```
+Before (Stage 2):  generate → review → END
+After  (Stage 3):  generate → review → plan → route_after_plan → { generate | END }
+```
+
+### Implementation status
+
+**Part A — `models/review.py` refactor** ✅ committed (ad8f082)
+`ReviewReport.build()` is now a composition of 6 focused `_check_*` classmethods:
+`_check_coverage_gaps`, `_check_low_coverage`, `_check_link_validity` (orphan + hallucinated), `_check_malformed`, `_check_duplicate_titles`, `_check_missing_types`. No behavior change.
+
+**Part B — `models/planning.py`** ✅
+```python
+class RemediationAction(str, Enum):
+    DONE = "done"
+    REGENERATE_ALL = "regenerate_all"
+
+class PlannerDecision(BaseModel):
+    action: RemediationAction
+    reason: str
+
+    @classmethod
+    def from_report(cls, report, review_rounds, max_rounds) -> PlannerDecision: ...
+```
+Decision order: `report is None → DONE("review_unavailable")` → `passed → DONE("passed")` → `rounds >= max → DONE("max_rounds_reached")` → `REGENERATE_ALL(first_error.category.value)`.
+
+**Part C — Config** ✅
+`MAX_REVIEW_ROUNDS: int = 2` added to `config.py`.
+
+**Part D — State** ✅
+`review_rounds: int` and `planner_decision: PlannerDecision | None` added to `QAState`. Both initialized in `create_session` (`review_rounds=0`, `planner_decision=None`).
+
+**Part E — `plan` node** ✅
+Calls `PlannerDecision.from_report(...)`, returns `planner_decision` and increments `review_rounds` only when action is `REGENERATE_ALL`. Node name is `plan` (consistent with verb-action naming: analyze, clarify, generate, review, plan).
+
+**Part G — Graph rewiring** ✅
+`review → plan → route_after_plan → { generate | END }`. `route_after_plan` reads `state["planner_decision"].action`.
+
+---
+
+**Part F — Generator gets findings as context** 🔲 IN PROGRESS
+Three changes needed:
+1. `generate` node passes `state["review_report"]` into `Session`
+2. `TestCaseGenerator.run()` serializes `session.review_report` findings and injects into `_load_prompt()`
+3. `prompts/test_case_generation.md` gets a `{review_feedback}` block — empty string on first pass, ERROR findings JSON on retry
+
+On first pass: `review_report` in state is `None` → `review_feedback = ""`.
+On retry: `review_report` has ERROR findings → serialize and inject so Claude knows what to fix.
+
+**Part H — API + docs** 🔲 TODO
+- Update `CLAUDE.md` (workflow diagram, state fields, new model, graph shape)
+- Update `.docs/architecture.md` "ReviewAgent is deterministic" entry (outdated since Stage 2)
+- Optionally surface `review_rounds` / `planner_decision` in `SessionResponse`
+
+**Part I — Unit tests** 🔲 TODO
+`PlannerDecision.from_report` (all four branches) and the `_check_*` methods — all pure, no LLM, no graph.
+
+### Why `plan` not `planner` as the node name
+All nodes use the verb form of their action: `analyze`, `clarify`, `generate`, `review`. `plan` is consistent with this convention. The Python function is named `plan`; the LangGraph node string is `"plan"`.
+
+### Why a dedicated `plan` node instead of embedding logic in the route function
+The route function is anonymous and untestable. A named `plan` node with a typed `PlannerDecision` output gives the same pattern as `TraceabilityMatrix.build()` and `ReviewReport.build()` — a pure classmethod testable without graph machinery. When the planner eventually needs LLM input, the node upgrades to a `BaseAgent` subclass without changing the graph wiring.
+
 
 ---
 
