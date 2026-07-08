@@ -137,6 +137,7 @@ def _build_response(session_id: str, state) -> SessionResponse:
             test_cases=_test_cases_out(state.values.get("test_cases", [])),
             traceability=_traceability_out(tm) if (tm := state.values["traceability_matrix"]) else None,
             review_report=_review_out(state.values.get("review_report")) if state.values.get("review_report") else None,
+            review_rounds=state.values.get("review_rounds"),
         )
 
 

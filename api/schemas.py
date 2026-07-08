@@ -92,4 +92,5 @@ class SessionResponse(BaseModel):
     questions: list[QuestionOut] | None = None       # present when AWAITING_CLARIFICATION
     test_cases: list[TestCaseOut] | None = None      # present when COMPLETE
     traceability: TraceabilityOut | None = None      # present when COMPLETE
-    review_report: ReviewReportOut | None = None        # present when COMPLETE
+    review_report: ReviewReportOut | None = None     # present when COMPLETE
+    review_rounds: int | None = None                 # number of regeneration retries triggered

@@ -24,7 +24,8 @@ api/app.py (FastAPI)
         ├── workflow/nodes.py: collect_answers  (LangGraph interrupt/resume)
         ├── workflow/nodes.py: generate   → agents/test_case_generator.py
         │     └── services/claude_client.py → Anthropic SDK
-        └── workflow/nodes.py: review     → agents/review_agent.py (deterministic)
+        ├── workflow/nodes.py: review     → agents/review_agent.py (deterministic + LLM)
+        └── workflow/nodes.py: plan       → models/planning.py PlannerDecision (deterministic)
 ```
 
 | Layer | Location | Responsibility |
@@ -56,6 +57,8 @@ class QAState(TypedDict):
     test_cases: list[TestCase]
     traceability_matrix: TraceabilityMatrix | None
     review_report: ReviewReport | None
+    review_rounds: int                 # incremented by plan node each time REGENERATE_ALL fires
+    planner_decision: PlannerDecision | None
 ```
 
 `clarification_rounds` uses an `operator.add` reducer — nodes return only the new round in a list and LangGraph appends it to the existing list automatically.
@@ -125,11 +128,24 @@ Fields:
 
 The review is **advisory** — a non-zero `error_count` does not block the pipeline. `passed=False` is surfaced in the API response for human review.
 
+### `PlannerDecision` (`models/planning.py`)
+Built deterministically by `PlannerDecision.from_report(report, review_rounds, max_rounds)`. Never delegated to Claude.
+
+Fields: `action: RemediationAction`, `reason: str`.
+
+`RemediationAction` enum: `DONE` | `REGENERATE_ALL`.
+
+Decision logic (checked in order):
+1. `report is None` → `DONE("review_unavailable")` — never loop on a crashed review
+2. `report.passed` → `DONE("passed")`
+3. `review_rounds >= MAX_REVIEW_ROUNDS` → `DONE("max_rounds_reached")`
+4. otherwise → `REGENERATE_ALL(first_error.category.value)`
+
 ---
 
 ## Workflow: clarification loop and stopping logic
 
-The graph flow is: `analyze → clarify → [collect_answers → clarify]* → generate → review → END`.
+The graph flow is: `analyze → clarify → [collect_answers → clarify]* → generate → review → plan → [generate → review → plan]* → END`.
 
 The `clarify` node (`workflow/nodes.py`) sets `clarification_complete` based on these conditions (in order):
 1. `not session.latest_round.questions` → no gaps found, stop
@@ -150,6 +166,8 @@ After `generate`: the `review` node runs `ReviewAgent`, which:
 3. Merges both finding lists into the same `ReviewReport`
 
 The review is non-blocking — if it crashes, the graph completes with `review_report=None` rather than locking the session. `ReviewReport` is stored in `QAState.review_report`.
+
+After `review`: the `plan` node calls `PlannerDecision.from_report(state["review_report"], state["review_rounds"], MAX_REVIEW_ROUNDS)`. `route_after_plan` in `workflow/graph.py` reads `planner_decision.action` to route to either `generate` (retry) or `END`. `review_rounds` is incremented only when `REGENERATE_ALL` fires — it counts regenerations triggered, not reviews run. On retry, `generate` passes `session.review_report` to `TestCaseGenerator`, which serializes ERROR+WARNING findings into a `{review_feedback}` block in the prompt so Claude knows what to fix.
 
 ---
 
@@ -217,7 +235,9 @@ Templates live in `prompts/*.md`. They use Python's `.format(**kwargs)` for vari
 
 **Stateless agents.** Agents must not store instance state between calls. If an agent needs data from a previous step, it reads it from `session`.
 
-**Deterministic review.** `ReviewReport` must always be built from structured data (`TraceabilityMatrix`, `StructuredRequirement`, `TestCase` fields). Do not delegate any finding category to Claude. The review gate is advisory — it surfaces findings but does not block test case delivery.
+**Deterministic structural review.** `ReviewReport.build()` and all `_check_*` classmethods must remain pure functions over structured data. Do not move structural checks (gap detection, orphan links, duplicates, malformed tests) into the LLM pass. Semantic findings (`WEAK_STEP`, `MISLINKED`, `SEMANTIC_GAP`, `SEMANTIC_DUPLICATE`) are LLM-only and live in `prompts/review.md`. The review gate is advisory — findings surface but do not block test case delivery.
+
+**Deterministic planning.** `PlannerDecision.from_report()` must remain a pure classmethod. Do not delegate the retry/stop decision to Claude — it must be auditable and consistent across runs.
 
 **Prompt files over inline strings.** Prompt text belongs in `prompts/*.md`, not in agent `run()` methods. This keeps prompt iteration decoupled from code changes.
 
@@ -239,6 +259,7 @@ Do not implement these unless explicitly asked.
 |---|---|---|
 | `DEFAULT_MODEL` | `claude-sonnet-4-6` | Used by all agents unless overridden |
 | `MAX_CLARIFICATION_ROUNDS` | `3` | Hard cap; tune in config, not in nodes |
+| `MAX_REVIEW_ROUNDS` | `2` | Max remediation retries before `plan` forces `DONE`; tune in config, not in nodes |
 | `SCORE_THRESHOLD` | `0.85` | Minimum completeness score to stop clarification; used in `clarify` node |
 | `COVERAGE_WARN_THRESHOLD` | `90.0` | Minimum coverage % before LOW_COVERAGE finding is raised; passed to `ReviewReport.build()` by `ReviewAgent` |
 | `PROMPTS_DIR` | `Path(__file__).parent / "prompts"` | Absolute, relative to config.py |
@@ -264,8 +285,8 @@ api/
     sessions.py              ← POST /sessions, POST /sessions/{id}/answers
 workflow/
   state.py                   ← QAState TypedDict with operator.add reducer
-  nodes.py                   ← analyze, clarify, collect_answers, generate, review node functions
-  graph.py                   ← StateGraph wiring, MemorySaver checkpointer
+  nodes.py                   ← analyze, clarify, collect_answers, generate, review, plan node functions
+  graph.py                   ← StateGraph wiring, MemorySaver checkpointer, route_after_plan
 models/
   __init__.py
   requirement.py             ← StructuredRequirement, AcceptanceCriterion, TestScope
@@ -273,6 +294,7 @@ models/
   test_case.py               ← TestCase, TestStep, Priority, TestCaseType
   traceability.py            ← TraceabilityMatrix
   review.py                  ← ReviewReport, ReviewFinding, Severity, FindingCategory
+  planning.py                ← PlannerDecision, RemediationAction
 orchestrator/
   session.py                 ← Session dataclass (node-to-agent bridge)
   pipeline.py                ← legacy CLI pipeline (kept for reference)
