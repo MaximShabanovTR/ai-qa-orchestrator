@@ -170,3 +170,211 @@ generate → review → plan → route_after_plan → { generate (retry) | END }
 **Why:** LangGraph's `MemorySaver` checkpointer owns all session state, keyed by `thread_id` (which equals `session_id`). A second data store would be a redundant copy with a divergence risk. The `SessionStore` exists only to answer "is this session_id valid?" for the 404 check — nothing more.
 
 **Implication:** Deleting a session from the store does not delete LangGraph checkpoint data. In production, checkpoint cleanup would need to be handled separately (e.g., TTL on the checkpoint backend).
+
+---
+
+# Stage 4: Automation generation (design — not yet implemented)
+
+Agreed design for the Playwright automation stage. Decisions below are design-time commitments; contracts and names may be refined during implementation, but the boundaries should hold.
+
+---
+
+## Automation stage is design-time only; runtime is postponed
+
+**Decision:** Stage A produces an automation framework as code artifacts. Playwright execution, browser/DOM interaction, and repair loops are postponed to a later stage.
+
+**Why:** Without a live application there is no DOM, no reliable locators, no API contracts, no authentication, no runtime environment, no test data. Execution and repair form a different problem space (runtime AI) with different inputs and failure modes. Building them before the design-time pipeline is mature would couple two unsolved problems.
+
+**Roadmap:**
+- **Stage A** — Semantic Automation Model + greenfield automation framework generation
+- **Stage B** — framework awareness (`FrameworkInventory` + analyzer for existing codebases)
+- **Stage C** — requirement impact analysis + incremental framework updates
+- **Stage D** — runtime execution + repair loops
+
+**Stage A investments that keep C/D cheap:** provenance annotations (TC/AC ids) in generated code; the Semantic Automation Model persisted as a first-class artifact (state + disk), never a transient prompt step; `FrameworkInventory` and `RendererConventions` contracts defined now and populated trivially (self-inventory, hardcoded defaults) until Stage B.
+
+**New contracts (all Pydantic):** `AutomationModel`, `AutomationFacts`, `AutomationPlan`, `CodeArtifact`, `FrameworkManifest`, `FrameworkInventory`, `RendererConventions`, plus validation-report and planner-decision analogs of `ReviewReport`/`PlannerDecision`.
+
+---
+
+## Semantic Automation Model + deterministic renderer (no LLM codegen)
+
+**Decision:** Code generation is split in two: `test cases + requirement → (LLM perception) → Semantic Automation Model → (deterministic renderer) → framework files`. The LLM never writes Playwright code.
+
+**Why:** LLMs excel at bridging informal intent to formal structure — that bridge is the requirement→model step, where ambiguity gets resolved. Once the model is fully typed, code emission is compilation: a total, mechanical mapping with exactly one correct output. Using an LLM there adds variance and unaudited decisions to a solved deterministic problem (the project's core principle applied at the point of highest consequence — the deliverable).
+
+**Validator asymmetry (why "LLM codegen + deterministic reviewer" fails):** a design-time reviewer can only check surface properties (syntax, lint, imports, naming). Semantic fidelity — does the code faithfully implement the model? — is verifiable only by execution (postponed) or by a complete model→code spec-checker, which *is* the renderer written in reverse. You would pay the renderer's complexity anyway, plus prompts, retry loops, and residual risk.
+
+**Reproducibility:** deterministic rendering is idempotent — same model, byte-identical output. Stage C (impact analysis, incremental updates) depends on clean diffs; LLM codegen produces gratuitous diffs on every run and kills that stage.
+
+**Scale:** whole-framework LLM output would hit truncation (`TestCaseGenerator` already needs `max_tokens=16000` for ~25 test cases) and cross-file coherence problems. The renderer gets coherence from shared declarations, not from a context window.
+
+**Trade-off:** the renderer is the largest deterministic component in the system, with real up-front template cost — but it is golden-file testable in CI at zero API cost, and bugs are fixed once, not handled probabilistically on every run. Steps outside the model vocabulary render as honest gaps rather than improvised code.
+
+**Deferred:** Stage B (extending an existing framework with arbitrary house style) may justify a constrained LLM pass at the renderer's *edge* (style adaptation of rendered output). Decided then, with real examples — never replacing the deterministic core.
+
+---
+
+## Perception vs policy: the pattern name for every LLM boundary
+
+**Decision:** The LLM extracts structured facts from unstructured input (*perception*); deterministic code makes every decision over those facts (*policy*). This generalizes the project's existing precedents: `linked_criteria` (perception) vs `TraceabilityMatrix.build()` (policy); semantic review findings vs `PlannerDecision.from_report()`.
+
+**Applications in this stage:**
+
+| Decision | Perception (LLM) | Policy (deterministic) |
+|---|---|---|
+| UI vs API channel | classify test intent | rules over classification + inventory capabilities |
+| Reuse vs create Page Object | screen descriptor extraction | descriptor match against inventory |
+| New spec vs extend | — | naming/organization convention |
+| Fixture reuse | preconditions → capability tags | tag match against fixture inventory |
+| Automation suitability | obstacle detection | obstacle → suitability rules |
+
+**Design test for every new feature:** what facts does the LLM extract, and what rules consume them? If the LLM output *is* the decision, the boundary is drawn wrong.
+
+---
+
+## Domain-centric model: declarations + scenarios as typed references
+
+**Decision:** The model is organized around domain declarations, not actions:
+
+```
+AutomationModel
+├── screens[]          each with an element registry
+├── operations[]       API capability descriptors
+├── data_profiles[]    symbolic test data definitions
+└── scenarios[]        linear step sequences; each step is a typed edge:
+                       (verb, element_ref | operation_ref, data_ref?, condition?)
+```
+
+Elements, operations, and data are declared once and referenced by ID. Steps are relationships between domain objects; a scenario is a path through the domain graph.
+
+**Why:** deduplication makes Page Object derivation deterministic ("Email field" in TC-001 and TC-007 is provably the same element). Impact analysis operates on declarations (a change touches an element → find referencing scenarios → regenerate exactly those artifacts). Stage B inventory matching is declaration-to-declaration. Action-centric, self-contained scenarios produce duplication and drift instead.
+
+**Targets are semantic element descriptors** — role, accessible name, containing region (accessibility-tree based), never selectors. Framework-neutral by construction (ARIA is a W3C standard) yet renders directly to `get_by_role(...)`, which is Playwright's own best practice.
+
+**Typing rule:** any field the renderer consumes must be an enum or typed structure. A free-text field is either a comment or a hole in determinism. Verify conditions are a closed enum with typed parameters (`VISIBLE`, `CONTAINS_TEXT(text)`, `HAS_VALUE(value)`, `ENABLED`, `DISABLED`, `COUNT(n)`).
+
+**Data profiles:** steps carry either a literal value or a symbolic reference to a declared data profile (`valid_email`, `oversized_string`). Profiles render as typed data factories in the generated framework.
+
+**Discipline rule:** every concept in the model must be consumed by at least one deterministic derivation rule; a concept nothing derives from is decoration, and decoration in a contract is where drift starts. Corollary: verifications stay inline steps (no top-level shared collection) until duplication evidence justifies promotion.
+
+---
+
+## Model scope: admission rule and explicit exclusions
+
+**Admission rule — a step type belongs in the model only if all three hold:**
+1. A manual QA engineer would write it as a test step.
+2. It describes user-observable behavior, not browser/framework mechanism.
+3. It renders to exactly one correct implementation given the conventions.
+
+**Vocabulary:** small closed enums — roughly `Navigate`, `EnterText`, `Activate`, `Select`, `Toggle`, `Verify` (UI family) and `CallOperation`, `VerifyResponse` (API family), plus `Unsupported`. Target: ~90–95% coverage of the generated test-case corpus, measured empirically — not completeness over Playwright.
+
+**Exclusions and where each concern lives instead:**
+
+| Excluded from the model | Home |
+|---|---|
+| Waits, retries, polling, network-idle | renderer (Playwright auto-waiting) |
+| Selectors (CSS/XPath/`nth()`) | renderer, derived from semantic descriptors |
+| Browser/context config, parallelism, tracing | generated scaffold (`playwright.config`, `conftest`) |
+| Network interception / response mocking | future runtime stage (needs real API shapes) |
+| `evaluate()`, script injection, direct cookie/storage manipulation | never in the model; state setup belongs to fixtures (Stage B+) |
+| Control flow inside a scenario (if/else, loops, try/except) | forbidden — scenarios are strictly linear; a branching test is two tests |
+| Multi-tab/window, popups, iframes, drag-and-drop, gestures | `Unsupported` escape hatch |
+| Visual/pixel-diff assertions, a11y/perf audits | out entirely |
+| Non-UI assertions (database state, emails sent, downloads) | `Unsupported` — honest gap |
+| Auth/session engineering (storage state, token injection) | fixtures layer, Stage B |
+
+**Escape hatch:** `Unsupported(description)` renders as a skipped test carrying the original step text — a visible, countable gap, never a silent omission. It doubles as the measurement instrument for the vocabulary ceiling: escape-hatch frequency data drives verb admission (a new verb gets in when it recurs in real runs *and* passes the admission rule).
+
+**Versioning:** the model carries a `schema_version`; vocabulary grows by deliberate, versioned decision, never by the generator emitting a new verb ad hoc.
+
+---
+
+## Channels: UI, API, and hybrid — channel is derived, bindings are provenance-gated
+
+**Decision:** MVP covers UI, API, and hybrid scenarios. Every verb inherently belongs to one channel family; a scenario's channel (`UI` | `API` | `HYBRID`) is *computed* from its steps, never declared. Hybrid falls out naturally (set up state via API, verify via UI).
+
+**API operation descriptors capture capability, never contract:** `intent`, `logical_inputs` (data profile refs), `expected_outcome_class` (success / rejection / validation error). This is derivable from requirement text ("the user can subscribe" states the capability). Transport details (method, path, payload shape, auth) live in an optional `binding` sub-object with a hard rule: **it may only be populated from information explicitly present in the requirement** — otherwise it stays `None`. The LLM never fills contract gaps with plausible REST conventions.
+
+**Renderer behavior:** the API client is generated as an interface with a visibly stubbed transport implementation ("contract unknown at generation time"), localized to one file. Test functions are fully real — they call client methods and assert on outcome class. The contract-shaped hole is typed, visible, and countable as a finding.
+
+**Why:** the UI/API grounding asymmetry is real — UI targets are observations from requirement text; API bindings are assumptions. The model encodes the asymmetry structurally instead of papering over it.
+
+---
+
+## Model inputs: test cases own scenarios; the requirement grounds declarations
+
+**Decision:** Model generation consumes both the reviewed test cases and the `StructuredRequirement` (plus answered clarifications), with asymmetric authority:
+- **Test cases are the sole source of scenarios.** One scenario per test case; perception may never invent a scenario from requirement text. The reviewed, remediated suite is the only authorized path into generated code.
+- **The requirement grounds declarations** — element naming, operation bindings, `TestScope`, AC text for provenance, data facts from clarification answers and assumptions (e.g., "RFC 5321 max length" grounds a data profile).
+
+**Why test-cases-only fails:** the binding provenance rule is unsatisfiable without requirement visibility; `TestScope` enforcement disappears; clarification-answer facts would have to be reconstructed from procedure prose while the typed source sits one field away.
+
+**Contradiction rule:** the requirement may enrich declarations, never contradict procedures. Detected drift between test cases and requirement is surfaced as a finding, not silently resolved.
+
+**Provenance:** declarations record their grounding source (AC ids, clarification question ids) so Stage C's "requirement changed → which declarations are stale?" is a lookup, not an investigation.
+
+**Plumbing cost: zero.** The `Session` bridge already carries `raw_input`, `requirement`, `clarification_rounds`, and `test_cases`.
+
+---
+
+## Content vs architecture: the renderer owns all architecture
+
+**Decision:** The Semantic Automation Model describes *what to test* (content — varies per requirement). All architecture of the generated framework — patterns, OOP structure, naming, directory layout, which base classes/enums/utils exist — is the renderer's fixed, versioned opinion, encoded in templates, derivation rules, and a `RendererConventions` config (hardcoded defaults in MVP).
+
+**Derivation rules (renderer-side):** screen → page class extending `BasePage`; element registry → locator properties; data profile → typed factory/enum; API operation → client method; scenario → test function with provenance annotations.
+
+**Why:** (1) reproducibility — if the model carried architectural choices, the LLM would decide architecture per-run and the clean-diff property dies; (2) uniformity — one opinion applied everywhere is what makes a generated framework feel engineered; (3) independent evolution — improving the architecture means changing templates and re-rendering the *same stored models* (a deterministic migration, zero LLM cost).
+
+**Stage B evolution:** conventions go from constant to variable — the `FrameworkAnalyzer` populates `RendererConventions`/`FrameworkInventory` from an existing codebase, and the renderer consumes them as parameters instead of defaults. The boundary does not move; what flows through it changes.
+
+---
+
+## Renderer is a layer of per-artifact renderers, not a God class
+
+**Decision:**
+
+```
+FrameworkRenderer.render(model, conventions) -> FrameworkManifest   ← thin composition root
+  ├── ScaffoldRenderer     static templates: config, conftest, base classes (near-zero logic)
+  ├── PageObjectRenderer   screens → page classes
+  ├── ApiClientRenderer    operations → client interface + stubs
+  ├── DataRenderer         profiles → factories / enums
+  └── TestRenderer         scenarios → test functions
+```
+
+Each artifact renderer is a pure function `(model slice, conventions) → list[CodeArtifact]`, independently golden-file-testable. Shared tier: `RendererConventions` (data) + emit primitives (imports, naming, provenance annotations). Same decomposition move as `ReviewReport._check_*`.
+
+**Output:** `FrameworkManifest` — every generated artifact with path, kind, and provenance (TC/AC ids). The manifest *is* the MVP self-inventory and the seed of Stage B's `FrameworkInventory`.
+
+**Framework is the unit of generation:** output is a maintainable project (`pages/`, `tests/`, `api/`, `fixtures/`, `utils/`, config), not loose spec files. Render target: **Python + pytest + playwright-python** (one language across the project; pytest fixtures map onto the fixtures concept).
+
+**Guardrail:** modules with a common signature, full stop — no renderer plugin registry, no abstract factories, no dynamic discovery.
+
+---
+
+## Automation Planner: bounded fact-gathering agent + deterministic plan
+
+**Decision:** Planning splits in two:
+1. **Agentic fact-gathering (bounded):** an LLM-driven loop fills a typed `AutomationFacts` object (per-TC channel classification, screen descriptors, fixture needs, inventory matches, obstacles) by choosing among typed tools. Terminates on a deterministic completeness check over `AutomationFacts` or a hard iteration cap — same philosophy as the clarification loop's stopping logic.
+2. **Deterministic plan assembly:** `AutomationPlan.build(facts, inventory)` — a pure classmethod in the `PlannerDecision` mold — makes every actual decision (channel, target files, reuse vs create, fixture binding).
+
+**Why agency there and only there:** tool needs genuinely vary per input (an unambiguous test case needs no classifier call; a greenfield run makes inventory lookups pointless) — real conditionals. A fixed tool chain would be a pipeline wearing an agent costume: latency and nondeterminism paid for no decision value. Decisions stay deterministic per perception/policy.
+
+**Graph rule:** the graph orchestrates stages; an agent may orchestrate *within* a stage but must emerge with a typed artifact and typed status. Model generation and validation are graph nodes, not planner tools — folding them into the planner would create a god-node and forfeit LangGraph checkpointing, resumability, and the validated review→plan→generate loop shape.
+
+**`BaseTool` (minimal, no registry):** `name`, `description` (needed for LLM tool selection), typed Pydantic input model, typed output model, `run(input) -> output`. Determinism is a **declared per-tool property** (`deterministic: bool`), not an assumption of the interface — perception tools wrap LLM calls behind the same interface, and the flag becomes audit metadata on gathered facts. A registry (discovery, permissions) is deferred until more than one agent shares tools.
+
+---
+
+## Automation suitability: typed obstacles, derived classes, no numeric confidence
+
+**Decision:** Suitability enters the model as typed facts with the perception/policy split applied:
+- **Perception:** detect *obstacles* from scenario content — closed enum: `CAPTCHA`, `OTP_SECOND_FACTOR`, `EXTERNAL_PAYMENT`, `HARDWARE_INTERACTION`, `VISUAL_JUDGMENT`, `EXTERNAL_SYSTEM_VERIFICATION`. Gathered during planner fact-gathering.
+- **Policy:** a rules table maps obstacles → suitability class (`AUTOMATED` | `AUTOMATED_WITH_PREREQS` | `MANUAL`) and typed prerequisites (`PAYMENT_SANDBOX`, `OTP_TEST_HOOK`, `CAPTCHA_BYPASS_TOKEN`). The LLM never assigns suitability directly — it reports what it saw; rules decide what it means.
+
+**Renderer behavior:** `MANUAL` scenarios render as skipped tests with reason + provenance — the framework carries a visible, greppable manual-test register instead of silently shrinking. `AUTOMATED_WITH_PREREQS` renders the real test plus explicitly stubbed prerequisite fixtures. Nothing unautomatable is dropped; everything is accounted for.
+
+**Why no confidence float:** an LLM-emitted `0.7` is unfalsifiable — nobody can say why it isn't `0.6`, so nobody can act on it or tune it. Discrete obstacles and counted assumptions (stub bindings, low-confidence locators) carry the same information in auditable form; any scalar is derived deterministically from those counts.
+
+**Locator honesty:** without a live DOM, locators are educated guesses. Semantic descriptors carry a confidence marker; low-confidence locators surface as advisory findings. Stage D execution is what eventually grounds them — pretending design-time locators are reliable would be self-deception.
