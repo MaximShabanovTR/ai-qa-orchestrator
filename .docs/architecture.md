@@ -378,3 +378,25 @@ Each artifact renderer is a pure function `(model slice, conventions) → list[C
 **Why no confidence float:** an LLM-emitted `0.7` is unfalsifiable — nobody can say why it isn't `0.6`, so nobody can act on it or tune it. Discrete obstacles and counted assumptions (stub bindings, low-confidence locators) carry the same information in auditable form; any scalar is derived deterministically from those counts.
 
 **Locator honesty:** without a live DOM, locators are educated guesses. Semantic descriptors carry a confidence marker; low-confidence locators surface as advisory findings. Stage D execution is what eventually grounds them — pretending design-time locators are reliable would be self-deception.
+
+---
+
+## Controlled LLM rendering fallback for unsupported interactions (deferred past Stage A)
+
+**Decision:** For steps outside the model vocabulary (canvas interactions, signature pads, custom widgets), a constrained LLM fallback may generate the implementation of a *single interaction* instead of rendering a bare `fixme`. The deterministic renderer still handles the entire common path; the fallback is invoked only for `Unsupported` steps. **Not built in Stage A** — the MVP renders `fixme`, but the renderer is designed with the socket from day one.
+
+**Why this survives the arguments against full LLM codegen:** the claim attached to the code changes. Deterministic output claims *correct by construction*; a fallback snippet claims *draft, requires human validation* — and is tagged as such. A guarantee is not undermined by an artifact that explicitly declares it does not carry that guarantee. The honest baseline comparison is not fallback-vs-renderer (the renderer cannot render these steps by definition) but fallback-vs-human-filling-the-fixme — and "LLM drafts, review gates" is the project's founding pattern (`TestCaseGenerator` → `ReviewAgent`) at smaller granularity.
+
+**Containment is structural, not prompt-based (the decisive condition):**
+- **Socket and plug:** the deterministic renderer emits everything — page class, method signature, test function, imports, provenance — except one method *body* with a fixed signature. The LLM fills the hole; it never sees "generate code for this test."
+- **AST validation on the way in:** import allowlist, no new classes, no file I/O, no fixture declarations, bounded length. Rejected snippet → fall back to `fixme`. Unlike semantic fidelity, containment *is* deterministically checkable — that is the difference between this and full LLM codegen.
+
+**Reproducibility mitigation:** a content-addressed snippet cache persisted alongside the model — key = hash(step description + socket signature + renderer version). Re-rendering reuses cached snippets byte-for-byte; a snippet regenerates only when its inputs change. This preserves the clean-diff property Stage C depends on.
+
+**Three-tier claim hierarchy in the manifest:** every code region is tagged **deterministic** (correct by construction), **AI-drafted** (contained, awaiting human validation), or **unsupported** (honest gap, skipped). Artifacts must never silently migrate between tiers — `CodeArtifact`/`FrameworkManifest` carry a per-region `source` field from Stage A onward, mirroring `ReviewFinding.source`.
+
+**Primary risk — classification drift:** once the escape hatch produces working-looking code instead of a visible `fixme`, the perception layer's path of least resistance shifts toward classifying borderline steps as `Unsupported`. Guards: the perception prompt requires vocabulary-first mapping; escape-hatch rate is a monitored metric; crossing a configured threshold raises an advisory finding (`HIGH_UNSUPPORTED_RATE`, same mold as `LOW_COVERAGE`).
+
+**Vocabulary promotion refinement:** fallback telemetry drives verb admission, but promotion requires frequency *and* the admission rule. Frequent interactions that cannot be deterministically rendered from a semantic description (e.g., freeform canvas drawing) stay in the fallback permanently — that is correct behavior, not a gap.
+
+**Why deferred:** the fallback is an optimization of the escape hatch, and its guardrails (AST validator, snippet cache, rate finding) are real components. Building containment infrastructure before escape-hatch telemetry shows the contained thing occurs often enough to matter is speculative work. Stage A's cheap dead-end prevention: unsupported steps render as a delegated hole-with-fixed-signature (whose MVP filling is a `fixme` body), so adding the fallback later means "add a plug supplier," not "rearchitect the renderer." This is the concrete form of the previously reserved seam — "a constrained LLM pass at the renderer's edge."
