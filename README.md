@@ -67,7 +67,7 @@ The full run produces ~25 test cases spanning form presence, validation, boundar
 
 ## Architecture
 
-The system is organized into six layers. Each layer has a single responsibility and communicates through typed Pydantic contracts.
+The system is organized into eight layers. Each layer has a single responsibility and communicates through typed Pydantic contracts.
 
 ```
 api/app.py (FastAPI)
@@ -75,8 +75,10 @@ api/app.py (FastAPI)
         ├── workflow/nodes.py: analyze    → agents/requirements_analyst
         ├── workflow/nodes.py: clarify    → agents/clarification_agent
         ├── workflow/nodes.py: collect_answers  (HTTP interrupt/resume)
-        └── workflow/nodes.py: generate   → agents/test_case_generator
-              └── services/claude_client  # Anthropic SDK wrapper (cached)
+        ├── workflow/nodes.py: generate   → agents/test_case_generator
+        │     └── services/claude_client  # Anthropic SDK wrapper (cached)
+        ├── workflow/nodes.py: review     → agents/review_agent (deterministic + LLM semantic checks)
+        └── workflow/nodes.py: plan       → models/planning.py PlannerDecision (deterministic)
 ```
 
 ### Layers
@@ -117,8 +119,16 @@ POST /sessions  { requirement: "..." }
 [TraceabilityMatrix]   →  coverage dict + gaps + coverage_pct  (computed, not LLM)
         │
         ▼
-SessionResponse { status: COMPLETE, test_cases: [...], traceability: {...} }
+[review node]          →  ReviewReport  (deterministic structural checks + LLM semantic checks)
+        │
+        ▼
+[plan node]            →  PlannerDecision.from_report()  (deterministic: DONE | REGENERATE_ALL)
+        │              REGENERATE_ALL → loop back to [generate], up to MAX_REVIEW_ROUNDS
+        ▼
+SessionResponse { status: COMPLETE, test_cases: [...], traceability: {...}, review: {...} }
 ```
+
+The review is advisory — a non-zero `error_count` does not block delivery, it triggers at most `MAX_REVIEW_ROUNDS` regeneration attempts before the session completes regardless.
 
 ---
 
@@ -150,6 +160,30 @@ This removes the LLM-as-judge-of-itself feedback loop and makes the stopping dec
 
 ---
 
+## Review & remediation
+
+After generation, every test suite passes through a review gate before the session completes.
+
+`ReviewAgent` runs two layers over the generated test cases:
+
+| Layer | Checks | Examples |
+|---|---|---|
+| Deterministic (`ReviewReport.build()`) | Structural, computed from typed data — no LLM | Coverage gaps, orphaned/hallucinated links, missing test types, duplicate titles, malformed tests |
+| LLM semantic (`prompts/review.md`) | Requires natural-language understanding | Vague/untestable steps, mislinked intent, missing scenarios, near-duplicate tests with different wording |
+
+Findings are merged into one `ReviewReport`, each tagged `source: "deterministic" | "llm"`. If the LLM call fails, the deterministic findings still stand — review never blocks the pipeline entirely.
+
+`PlannerDecision.from_report()` then makes a pure, auditable decision:
+
+1. No report available → `DONE` (never loop on a crashed review)
+2. Report passed (zero ERROR-severity findings) → `DONE`
+3. `MAX_REVIEW_ROUNDS` reached → `DONE` regardless of outcome
+4. Otherwise → `REGENERATE_ALL`, looping back to test case generation with the findings fed into the next prompt as `{review_feedback}`
+
+The retry/stop decision is never delegated to Claude — same principle as the clarification stopping logic, applied one stage later.
+
+---
+
 ## Project structure
 
 ```
@@ -169,8 +203,8 @@ ai-qa-orchestrator/
 │
 ├── workflow/
 │   ├── state.py                     # QAState TypedDict (LangGraph shared state)
-│   ├── nodes.py                     # Node functions: analyze, clarify, collect_answers, generate
-│   └── graph.py                     # StateGraph wiring + MemorySaver checkpointer
+│   ├── nodes.py                     # Node functions: analyze, clarify, collect_answers, generate, review, plan
+│   └── graph.py                     # StateGraph wiring + MemorySaver checkpointer + route_after_plan
 │
 ├── orchestrator/
 │   ├── pipeline.py                  # Legacy CLI pipeline (kept for reference)
@@ -178,20 +212,26 @@ ai-qa-orchestrator/
 │
 ├── agents/
 │   ├── base_agent.py                # Abstract: prompt load, Claude call, JSON parse
+│   ├── exceptions.py                # AgentError
 │   ├── requirements_analyst.py
 │   ├── clarification_agent.py
-│   └── test_case_generator.py
+│   ├── test_case_generator.py
+│   └── review_agent.py              # Deterministic checks (ReviewReport.build) + LLM semantic checks
 │
 ├── models/
 │   ├── requirement.py               # StructuredRequirement, AcceptanceCriterion, TestScope
 │   ├── clarification.py             # ClarificationQuestion, ClarificationRound, QuestionTier
 │   ├── test_case.py                 # TestCase, TestStep, Priority, TestCaseType
-│   └── traceability.py              # TraceabilityMatrix
+│   ├── traceability.py              # TraceabilityMatrix
+│   ├── review.py                    # ReviewReport, ReviewFinding, Severity, FindingCategory
+│   ├── planning.py                  # PlannerDecision, RemediationAction
+│   └── automation.py                # AutomationModel — Stage 4 schema, not yet wired into the graph
 │
 ├── prompts/
 │   ├── requirements_analysis.md
 │   ├── clarification.md
-│   └── test_case_generation.md
+│   ├── test_case_generation.md
+│   └── review.md                    # LLM semantic review (weak steps, mislinks, gaps, duplicates)
 │
 ├── services/
 │   ├── claude_client.py             # Anthropic SDK + ephemeral prompt caching
@@ -200,6 +240,12 @@ ai-qa-orchestrator/
 ├── generators/
 │   ├── base_generator.py            # Abstract: test cases → runnable files
 │   └── playwright_generator.py      # Playwright/TypeScript (stub)
+│
+├── tests/
+│   ├── unit/                        # Fast, no I/O — models, review checks, planner, automation contracts
+│   ├── contract/                    # Mocked LLM — agent wiring, remediation loop end-to-end
+│   ├── smoke/                       # Real LLM — schema-only assertions
+│   └── evals/                       # Real LLM — quality rubric
 │
 └── output/                          # Generated test cases (git-ignored)
 ```
@@ -270,6 +316,8 @@ All tunable constants live in `config.py`:
 | `DEFAULT_MODEL` | `claude-sonnet-4-6` | Claude model used by all agents |
 | `MAX_CLARIFICATION_ROUNDS` | `3` | Hard cap on clarification loop iterations |
 | `SCORE_THRESHOLD` | `0.85` | Minimum completeness score to exit clarification without all answers |
+| `MAX_REVIEW_ROUNDS` | `2` | Max regeneration attempts before `plan` forces `DONE` regardless of outcome |
+| `COVERAGE_WARN_THRESHOLD` | `90.0` | Minimum coverage % before a `LOW_COVERAGE` finding is raised |
 
 Penalty weights live in `ClarificationRound.completeness_score` in `models/clarification.py`.
 
@@ -304,8 +352,10 @@ Penalty weights live in `ClarificationRound.completeness_score` in `models/clari
 | JSON + Markdown output | Done | `test_cases.json`, `test_cases.md`, `session.json` |
 | LangGraph workflow | Done | Interrupt/resume graph replacing sequential pipeline |
 | FastAPI interface | Done | Two-endpoint REST API with unified `SessionResponse` |
-| Test case review layer | Planned | Validation agent to detect gaps in generated suite |
-| Playwright test generation | Planned | Transform `TestCase` models into `.spec.ts` files |
+| Test case review layer | Done | Deterministic + LLM hybrid `ReviewAgent`, advisory quality gate |
+| Remediation loop | Done | Deterministic `PlannerDecision` drives bounded regenerate-on-failure |
+| Semantic Automation Model | Designed | Framework-neutral schema for Playwright generation — see `.docs/architecture.md`; implemented in `models/automation.py`, not yet wired into the workflow |
+| Playwright test generation | Planned | Deterministic renderer: `AutomationModel` → runnable pytest/Playwright framework |
 
 ---
 

@@ -14,7 +14,7 @@ This is not a chatbot or a generic agent framework. It is a focused, domain-spec
 
 ## Architecture
 
-Six layers. Each has a single responsibility. They communicate only through Pydantic models — no raw dicts, no string passing between layers.
+Eight layers. Each has a single responsibility. They communicate only through Pydantic models — no raw dicts, no string passing between layers.
 
 ```
 api/app.py (FastAPI)
@@ -246,6 +246,7 @@ Templates live in `prompts/*.md`. They use Python's `.format(**kwargs)` for vari
 ## What is not yet implemented
 
 - `generators/playwright_generator.py` — stub only; raises `NotImplementedError`
+- `models/automation.py` — Semantic Automation Model schema (Stage 4 design; see `.docs/architecture.md`). Fully implemented and unit-tested, but not yet wired into any agent, node, or the workflow graph — nothing produces or consumes an `AutomationModel` yet.
 
 Do not implement these unless explicitly asked.
 
@@ -273,7 +274,7 @@ Penalty weights live in `ClarificationRound.completeness_score` in `models/clari
 ```
 CLAUDE.md                    ← this file (public, tracked)
 CLAUDE.local.md              ← local session context (git-ignored)
-.docs/architecture.md        ← architecture decisions (git-ignored, in progress)
+.docs/architecture.md        ← architecture decisions (tracked, in progress)
 config.py                    ← DEFAULT_MODEL, MAX_CLARIFICATION_ROUNDS, SCORE_THRESHOLD, COVERAGE_WARN_THRESHOLD
 main.py                      ← legacy CLI entry point (kept for reference)
 requirements.txt
@@ -295,6 +296,7 @@ models/
   traceability.py            ← TraceabilityMatrix
   review.py                  ← ReviewReport, ReviewFinding, Severity, FindingCategory
   planning.py                ← PlannerDecision, RemediationAction
+  automation.py              ← AutomationModel (Stage 4 design; schema only, not wired in)
 orchestrator/
   session.py                 ← Session dataclass (node-to-agent bridge)
   pipeline.py                ← legacy CLI pipeline (kept for reference)
@@ -316,7 +318,7 @@ generators/
   base_generator.py
   playwright_generator.py    ← stub
 tests/
-  unit/                      ← fast, no I/O (TraceabilityMatrix, PlannerDecision, review _check_* methods, etc.)
+  unit/                      ← fast, no I/O (TraceabilityMatrix, PlannerDecision, review _check_* methods, automation model contracts, etc.)
   contract/                  ← mocked LLM, schema validation, remediation loop end-to-end
   smoke/                     ← real LLM, schema-only assertions
   evals/                     ← real LLM, quality rubric

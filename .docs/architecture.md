@@ -177,6 +177,10 @@ generate → review → plan → route_after_plan → { generate (retry) | END }
 
 Agreed design for the Playwright automation stage. Decisions below are design-time commitments; contracts and names may be refined during implementation, but the boundaries should hold.
 
+**Implementation status:** the schema described below (`AutomationModel` and its nested contracts — `Screen`/`Element`, `Operation`, `DataProfile`, `Scenario`, `Step` and its per-verb payloads, `SuitabilityAssessment`) is implemented in `models/automation.py`, covered by `tests/unit/test_automation_models.py`. Nothing downstream exists yet — no perception agent populates it, no renderer consumes it, no workflow node or graph edge references it. It is a standalone, tested data contract, not yet part of the running system.
+
+**Known gap vs. this design:** the "Model inputs" decision below commits to declarations recording their specific grounding source (AC ids, clarification question ids) for cheap staleness lookups in Stage C. The current schema only has a coarse `GroundingSource.STATED | ASSUMED` flag on `TargetDescriptor` and `DataProfile` — it does not yet link to the specific AC or question id that grounded it. Revisit this before Stage C impact analysis is designed.
+
 ---
 
 ## Automation stage is design-time only; runtime is postponed
