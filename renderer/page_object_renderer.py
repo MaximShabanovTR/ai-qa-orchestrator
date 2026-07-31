@@ -1,7 +1,6 @@
-import re
-
 from models.automation import Element, ElementRole, Scenario, Screen
 from renderer.models import ArtifactKind, CodeArtifact, RendererConventions
+from renderer.naming import slugify
 
 
 def render_page_objects(
@@ -51,15 +50,8 @@ def _class_name(screen: Screen) -> str:
     return "".join(word.capitalize() for word in screen.name.split()) + "Page"
 
 
-def _slugify(text: str) -> str:
-    slug = re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_")
-    if not slug or slug[0].isdigit():
-        slug = f"element_{slug}" if slug else "element"
-    return slug
-
-
 def _property_name(element: Element) -> str:
-    return _slugify(element.descriptor.name)
+    return slugify(element.descriptor.name)
 
 
 def _element_screen_map(screens: list[Screen]) -> dict[str, str]:
@@ -193,7 +185,7 @@ def _render_transition_method(
     target_screen: Screen, triggering_property: str, conventions: RendererConventions
 ) -> list[str]:
     lines = [
-        f"    def go_to_{_slugify(target_screen.name)}(self):",
+        f"    def go_to_{slugify(target_screen.name)}(self):",
         f"        from {conventions.pages_dir}.{target_screen.id} import {_class_name(target_screen)}",
         f"        self.{triggering_property}.click()",
         f"        return {_class_name(target_screen)}(self.page, self.base_url)",

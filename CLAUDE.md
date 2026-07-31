@@ -14,7 +14,7 @@ This is not a chatbot or a generic agent framework. It is a focused, domain-spec
 
 ## Architecture
 
-Eight layers. Each has a single responsibility. They communicate only through Pydantic models — no raw dicts, no string passing between layers.
+Nine layers. Each has a single responsibility. They communicate only through Pydantic models — no raw dicts, no string passing between layers.
 
 ```
 api/app.py (FastAPI)
@@ -37,7 +37,8 @@ api/app.py (FastAPI)
 | Models | `models/` | Pydantic data contracts between all layers |
 | Services | `services/` | Anthropic SDK wrapper, JSON/Markdown serializers |
 | Prompts | `prompts/` | Markdown templates with `{placeholder}` variables |
-| Generators | `generators/` | Code generation — Playwright stub, not yet implemented |
+| Generators | `generators/` | Legacy pre-Stage-4 stub; superseded by `renderer/`, not extended |
+| Renderer | `renderer/` | Deterministic `AutomationModel` → Playwright/pytest framework code (Stage 4; in progress, not yet wired in) |
 
 ---
 
@@ -245,8 +246,9 @@ Templates live in `prompts/*.md`. They use Python's `.format(**kwargs)` for vari
 
 ## What is not yet implemented
 
-- `generators/playwright_generator.py` — stub only; raises `NotImplementedError`
-- `models/automation.py` — Semantic Automation Model schema (Stage 4 design; see `.docs/architecture.md`). Fully implemented and unit-tested, but not yet wired into any agent, node, or the workflow graph — nothing produces or consumes an `AutomationModel` yet.
+- `generators/playwright_generator.py` — legacy stub; raises `NotImplementedError`. Superseded by `renderer/` for Stage 4 codegen — not reused, not extended.
+- `models/automation.py` — Semantic Automation Model schema (Stage 4 design; see `.docs/architecture.md`). Fully implemented and unit-tested.
+- `renderer/` — deterministic `AutomationModel` → framework renderer (Stage 4; see `.docs/architecture.md`). `ScaffoldRenderer`, `PageObjectRenderer`, `DataRenderer` implemented. `ApiClientRenderer`, `TestRenderer`, and the `FrameworkRenderer` composition root are not yet built. Nothing produces an `AutomationModel` yet (no perception agent), and no node or graph edge calls the renderer — it is exercised only by manual/unit-level checks so far.
 
 Do not implement these unless explicitly asked.
 
@@ -316,7 +318,14 @@ services/
   output_writer.py
 generators/
   base_generator.py
-  playwright_generator.py    ← stub
+  playwright_generator.py    ← legacy stub, superseded by renderer/
+renderer/
+  __init__.py
+  models.py                  ← CodeArtifact, FrameworkManifest, RendererConventions
+  naming.py                  ← slugify() - shared text-to-identifier helper
+  scaffold_renderer.py       ← pytest.ini, conftest.py (base_url fixture)
+  page_object_renderer.py    ← Screen/Element → page classes; ElementRole → locator strategy; scenario-derived navigation methods
+  data_renderer.py           ← DataProfile → typed constants / stdlib-only generator functions
 tests/
   unit/                      ← fast, no I/O (TraceabilityMatrix, PlannerDecision, review _check_* methods, automation model contracts, etc.)
   contract/                  ← mocked LLM, schema validation, remediation loop end-to-end

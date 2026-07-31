@@ -357,6 +357,18 @@ Each artifact renderer is a pure function `(model slice, conventions) → list[C
 
 ---
 
+## Generated framework has zero third-party runtime dependencies
+
+**Decision:** Renderer output may import only `pytest`, `pytest-playwright`, and the Python standard library — never a third-party package such as `Faker`. This applies to every artifact renderer, but is most consequential for `DataRenderer`'s constraint-driven generators (`random`/`string`/`datetime` only).
+
+**Why:** the generated framework runs on whatever machine the end QA team has, frequently a locked-down corporate VDI with no outbound package-index access or an approval process for new dependencies. A generated automation project that fails `pip install` is worse than one with less realistic test data. This is a stronger bar than "avoid unnecessary dependencies" in the orchestrator's own `requirements.txt` — it is a hard constraint on code handed to someone else's environment, not a style preference for this codebase.
+
+**Consequence for `DataCategory` generation:** `NUMBER`, `BOOLEAN`, and unconstrained-length `TEXT` are trivially stdlib (`random`). `EMAIL`/`URL`/`DATE`/`DATETIME` don't actually need Faker's realism either — test data only needs to be syntactically valid for its category, not naturalistic, so a synthetic stdlib value (e.g. `f"user{random.randint(...)}@example.com"`) is sufficient. The one case stdlib genuinely cannot cover honestly is `TEXT` with a `pattern` constraint — matching an arbitrary regex is a real algorithmic gap, not a missing-dependency problem, so it renders as an honest gap (`source="unsupported"`) rather than an ad hoc partial implementation. `DataCategory.UNSUPPORTED` is the same tier by definition.
+
+**Trade-off:** this costs generation coverage, not correctness — the model already has the vocabulary (`source="unsupported"`) to express "cannot generate this" honestly rather than silently degrading. Revisit only if telemetry shows `pattern`-constrained profiles are common enough to justify a dependency, and even then the choice belongs to whoever owns the target deployment environment, not the renderer.
+
+---
+
 ## Automation Planner: bounded fact-gathering agent + deterministic plan
 
 **Decision:** Planning splits in two:
