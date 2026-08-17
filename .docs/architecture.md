@@ -300,9 +300,35 @@ Elements, operations, and data are declared once and referenced by ID. Steps are
 
 **API operation descriptors capture capability, never contract:** `intent`, `logical_inputs` (data profile refs), `expected_outcome_class` (success / rejection / validation error). This is derivable from requirement text ("the user can subscribe" states the capability). Transport details (method, path, payload shape, auth) live in an optional `binding` sub-object with a hard rule: **it may only be populated from information explicitly present in the requirement** — otherwise it stays `None`. The LLM never fills contract gaps with plausible REST conventions.
 
-**Renderer behavior:** the API client is generated as an interface with a visibly stubbed transport implementation ("contract unknown at generation time"), localized to one file. Test functions are fully real — they call client methods and assert on outcome class. The contract-shaped hole is typed, visible, and countable as a finding.
+**Renderer behavior:** the client splits into two layers. `BaseApiClient` provides generic `get`/`post`/`put`/`patch`/`delete` builders, all funnelling into one shared `_request(method, path, **kwargs)` — that single method is the actual stub ("HTTP transport not implemented at design time"), since sending a real request needs a live base URL and auth wiring that don't exist until Stage B fixtures. Per-`Operation` methods on `ApiClient` are **not** all stubs: when `operation.binding` is set, the method is real, deterministic call-construction code (`return self.post("/api/payments", json={...})`) built from the known method/path — it still raises when actually invoked, but only because the shared transport isn't wired up, not because the call itself is unknown. Only operations with `binding is None` raise for their own reason ("contract unknown at generation time"). Test functions are fully real either way — they call client methods and assert on outcome class. The contract-shaped hole is typed, visible, localized to `_request`, and countable as a finding.
 
 **Why:** the UI/API grounding asymmetry is real — UI targets are observations from requirement text; API bindings are assumptions. The model encodes the asymmetry structurally instead of papering over it.
+
+---
+
+## Operation resource grouping + environment-sourced endpoint URLs
+
+**Decision:** `Operation` gains an optional `resource: str | None = None` field. `ApiClientRenderer` groups operations by `resource` into one `{Resource}Endpoint(BaseApiClient)` class per distinct value; operations with `resource is None` stay directly on the root `ApiClient`. `ApiClient` composes named endpoints as attributes (`self.payments = PaymentsEndpoint()`). Each `Endpoint`'s base URL is not stored in the model at all — it's read at runtime from a generated, environment-sourced config (`ENDPOINT_URLS`, keyed by resource name, populated from `os.environ.get(...)`).
+
+**Why grounded by test cases, not requirements:** an `Operation` only exists in the model because some test case's steps call it (`CallOperation`/`VerifyResponse` referencing it) — per the existing "test cases are the sole source of scenarios" rule. `resource` follows the same grounding: it's derived from the test case's own action text (which names the resource being exercised), not the higher-level requirement, consistent with how the operation itself was discovered.
+
+**Why optional:** not every operation will cleanly resolve to a named resource (mirrors why `binding` is optional) — grouping is a bonus organizational signal, not a required one, and ungrouped operations still work correctly on the flat `ApiClient`.
+
+**Why base URL lives in a config file, not the model:** a resource's base URL differs per deployment environment (dev/staging/prod) but its relative path does not — `OperationBinding.path` is already environment-independent model data. Base URL is pure environment configuration, not something extractable from a requirement or test case, so it was never a good fit for `AutomationModel`. Sourcing it from `os.environ` at runtime (rather than baking a `{resource: {env: url}}` structure into a generated file) means switching environments never touches generated code — the same "renderer generates structure, human supplies environment-specific values" pattern already used for `base_url` in `ScaffoldRenderer`'s `conftest.py` fixture, just extended per-resource.
+
+**Trade-off:** this bends "declared not inferred" slightly — nothing forces every real resource to get a `resource` value; a perception step choosing not to populate it degrades gracefully to the flat client, so under-grouping is possible but never produces incorrect code, only a less-organized one.
+
+---
+
+## Typed API request bodies with individual-param method signatures
+
+**Decision:** `ApiClientRenderer` additionally consumes `data_profiles`. For each `logical_inputs` entry with a resolvable `DataProfile`, its `DataCategory` maps to a concrete Python type (`NUMBER→float`, `BOOLEAN→bool`, `TEXT`/`EMAIL`/`URL`/`DATE`/`DATETIME→str`), and each bound operation's method generates a `@dataclass` `{MethodName}Request` with those typed fields — stdlib `dataclasses`, not Pydantic, per the "zero third-party runtime dependencies" decision, which applies here too (Pydantic v2's validation core is a compiled Rust extension, not a pure-Python package — a materially bigger install ask than stdlib in a locked-down environment, and not a hard requirement for the generated tests to run the way `pytest`/`pytest-playwright` are). The method signature itself keeps individual named parameters (`def submit_payment(self, order_id, amount):`) — the request object is constructed *inside* the method, then serialized (`dataclasses.asdict(request)`) for the transport call; callers never construct or see the dataclass type directly.
+
+**Why individual params, not a caller-supplied object:** `CallOperation.inputs: dict[str, DataRef]` is already a flat, named mapping at the model level — `TestRenderer` (Task 11) will render calls directly from that shape. Keyword arguments map onto it with no intermediate step; requiring callers to construct a typed object first would mean `TestRenderer` also has to know how to build and import that object per operation, for no benefit.
+
+**Trade-off vs. Pydantic:** a `@dataclass` documents the expected shape and gives IDE support, but doesn't validate types at construction the way Pydantic would. Accepted because the data flowing into these request objects is already produced by a guaranteed-correct pipeline (`DataRenderer`'s category-derived generators, `DataProfile`'s own literal-value validator) — the narrower remaining risk (a human hand-editing generated test code with a wrong type) doesn't justify the portability cost of a compiled third-party dependency.
+
+**Deferred to TestRenderer:** a "baseline request + scenario-specific overrides" pattern (each scenario only naming what it deviates from) is a good idea but isn't `ApiClientRenderer`'s decision — the model has no declared concept of a canonical/default value per field, only per-scenario `CallOperation.inputs`. Individual-param method signatures are what make this pattern possible later (`client.submit_payment(**{**defaults, **overrides})`), without `ApiClientRenderer` needing to know anything about it now.
 
 ---
 

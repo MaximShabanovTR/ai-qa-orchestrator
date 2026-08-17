@@ -202,6 +202,18 @@ def test_operation_binding_defaults_to_none():
     op = Operation(id="OP-001", intent="create subscription", expected_outcome_class="success")
     assert op.binding is None
     assert op.logical_inputs == []
+    assert op.resource is None
+
+
+@pytest.mark.unit
+def test_operation_accepts_stated_resource():
+    op = Operation(
+        id="OP-001",
+        intent="create subscription",
+        expected_outcome_class="success",
+        resource="subscriptions",
+    )
+    assert op.resource == "subscriptions"
 
 
 @pytest.mark.unit

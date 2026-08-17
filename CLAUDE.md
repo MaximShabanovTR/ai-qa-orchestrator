@@ -248,7 +248,7 @@ Templates live in `prompts/*.md`. They use Python's `.format(**kwargs)` for vari
 
 - `generators/playwright_generator.py` — legacy stub; raises `NotImplementedError`. Superseded by `renderer/` for Stage 4 codegen — not reused, not extended.
 - `models/automation.py` — Semantic Automation Model schema (Stage 4 design; see `.docs/architecture.md`). Fully implemented and unit-tested.
-- `renderer/` — deterministic `AutomationModel` → framework renderer (Stage 4; see `.docs/architecture.md`). `ScaffoldRenderer`, `PageObjectRenderer`, `DataRenderer` implemented. `ApiClientRenderer`, `TestRenderer`, and the `FrameworkRenderer` composition root are not yet built. Nothing produces an `AutomationModel` yet (no perception agent), and no node or graph edge calls the renderer — it is exercised only by manual/unit-level checks so far.
+- `renderer/` — deterministic `AutomationModel` → framework renderer (Stage 4; see `.docs/architecture.md`). `ScaffoldRenderer`, `PageObjectRenderer`, `DataRenderer`, `ApiClientRenderer` implemented. `TestRenderer` and the `FrameworkRenderer` composition root are not yet built. Nothing produces an `AutomationModel` yet (no perception agent), and no node or graph edge calls the renderer — it is exercised only by manual/unit-level checks so far.
 
 Do not implement these unless explicitly asked.
 
@@ -326,6 +326,7 @@ renderer/
   scaffold_renderer.py       ← pytest.ini, conftest.py (base_url fixture)
   page_object_renderer.py    ← Screen/Element → page classes; ElementRole → locator strategy; scenario-derived navigation methods
   data_renderer.py           ← DataProfile → typed constants / stdlib-only generator functions
+  api_client_renderer.py     ← Operation → resource-grouped client classes; dataclass request bodies; env-var-sourced endpoint URLs
 tests/
   unit/                      ← fast, no I/O (TraceabilityMatrix, PlannerDecision, review _check_* methods, automation model contracts, etc.)
   contract/                  ← mocked LLM, schema validation, remediation loop end-to-end

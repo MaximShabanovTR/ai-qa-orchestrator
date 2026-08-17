@@ -247,7 +247,8 @@ ai-qa-orchestrator/
 │   ├── naming.py                    # slugify() - shared text-to-identifier helper
 │   ├── scaffold_renderer.py         # pytest.ini, conftest.py (base_url fixture)
 │   ├── page_object_renderer.py      # Screen/Element → page classes, navigation methods
-│   └── data_renderer.py             # DataProfile → typed constants / stdlib-only generators
+│   ├── data_renderer.py             # DataProfile → typed constants / stdlib-only generators
+│   └── api_client_renderer.py       # Operation → resource-grouped client classes, dataclass request bodies
 │
 ├── tests/
 │   ├── unit/                        # Fast, no I/O — models, review checks, planner, automation contracts
@@ -363,7 +364,7 @@ Penalty weights live in `ClarificationRound.completeness_score` in `models/clari
 | Test case review layer | Done | Deterministic + LLM hybrid `ReviewAgent`, advisory quality gate |
 | Remediation loop | Done | Deterministic `PlannerDecision` drives bounded regenerate-on-failure |
 | Semantic Automation Model | Designed | Framework-neutral schema for Playwright generation — see `.docs/architecture.md`; implemented in `models/automation.py`, not yet wired into the workflow |
-| Playwright test generation | In progress | Deterministic renderer: `AutomationModel` → runnable pytest/Playwright framework. `ScaffoldRenderer`/`PageObjectRenderer`/`DataRenderer` built; `ApiClientRenderer`/`TestRenderer`/`FrameworkRenderer` composition root pending. Not yet wired into the workflow. |
+| Playwright test generation | In progress | Deterministic renderer: `AutomationModel` → runnable pytest/Playwright framework. `ScaffoldRenderer`/`PageObjectRenderer`/`DataRenderer`/`ApiClientRenderer` built; `TestRenderer`/`FrameworkRenderer` composition root pending. Not yet wired into the workflow. |
 
 ---
 
