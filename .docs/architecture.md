@@ -320,6 +320,18 @@ Elements, operations, and data are declared once and referenced by ID. Steps are
 
 ---
 
+## Screen path grounds Navigate rendering
+
+**Decision:** `Screen` gains an optional `path: str | None = None` field. `TestRenderer` renders a scenario's opening `Navigate` step as `self.navigate(screen.path)` when `screen.path` is set; when it's `None`, the step renders as an honest gap (raise), same tier as an unbound `Operation`.
+
+**Why this was missing:** `Screen` originally had only `id`/`name`/`elements` — enough for `PageObjectRenderer` to build page classes and derive transition methods (clicking through screens never needed a URL), but a scenario's *first* `Navigate` step means "the browser opens this screen," which requires an actual URL that nothing in the model captured. Rendering it as bare page-object instantiation with no real `.navigate()` call would silently produce a broken test — locators would fail against whatever page the browser happened to already be on, with no error pointing at the real cause (a missing URL, not a missing element).
+
+**Why grounded by the requirement, like `OperationBinding.path`:** unlike `Operation.resource` (organizational, derived from test case action text), a screen's path is the same kind of fact as an API binding's path — a literal, network-facing detail that must come from explicit input text, never inferred. Same hard rule as `OperationBinding`: populated only when the requirement explicitly states it, `None` otherwise, never a plausible-looking guessed route.
+
+**Why optional, and why transitions don't need it:** most `Navigate` steps in practice aren't a scenario's opening step — `PageObjectRenderer`'s derived `go_to_*` methods already handle mid-scenario navigation via clicks, no URL required. `path` only matters for the entry point, so it's fine for most `Screen`s to never populate it.
+
+---
+
 ## Typed API request bodies with individual-param method signatures
 
 **Decision:** `ApiClientRenderer` additionally consumes `data_profiles`. For each `logical_inputs` entry with a resolvable `DataProfile`, its `DataCategory` maps to a concrete Python type (`NUMBER→float`, `BOOLEAN→bool`, `TEXT`/`EMAIL`/`URL`/`DATE`/`DATETIME→str`), and each bound operation's method generates a `@dataclass` `{MethodName}Request` with those typed fields — stdlib `dataclasses`, not Pydantic, per the "zero third-party runtime dependencies" decision, which applies here too (Pydantic v2's validation core is a compiled Rust extension, not a pure-Python package — a materially bigger install ask than stdlib in a locked-down environment, and not a hard requirement for the generated tests to run the way `pytest`/`pytest-playwright` are). The method signature itself keeps individual named parameters (`def submit_payment(self, order_id, amount):`) — the request object is constructed *inside* the method, then serialized (`dataclasses.asdict(request)`) for the transport call; callers never construct or see the dataclass type directly.

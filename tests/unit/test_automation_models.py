@@ -185,6 +185,13 @@ def test_call_operation_resolves_nested_data_refs():
 def test_screen_defaults_to_empty_elements():
     screen = Screen(id="SCR-001", name="Login")
     assert screen.elements == []
+    assert screen.path is None
+
+
+@pytest.mark.unit
+def test_screen_accepts_stated_path():
+    screen = Screen(id="SCR-001", name="Login", path="/login")
+    assert screen.path == "/login"
 
 
 @pytest.mark.unit

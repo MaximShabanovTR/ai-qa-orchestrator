@@ -183,6 +183,7 @@ class Screen(BaseModel):
     id: str
     name: str
     elements: list[Element] = []
+    path: str | None = None
 
 
 class OperationBinding(BaseModel):
