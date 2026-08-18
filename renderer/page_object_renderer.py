@@ -1,12 +1,13 @@
 from models.automation import Element, ElementRole, Scenario, Screen
 from renderer.models import ArtifactKind, CodeArtifact, RendererConventions
 from renderer.naming import slugify
+from renderer.transitions import derive_transitions
 
 
 def render_page_objects(
     screens: list[Screen], scenarios: list[Scenario], conventions: RendererConventions
 ) -> list[CodeArtifact]:
-    transitions = _derive_transitions(screens, scenarios)
+    transitions = derive_transitions(screens, scenarios)
     screens_by_id = {screen.id: screen for screen in screens}
     artifacts: list[CodeArtifact] = [
         _render_init(conventions),
@@ -46,62 +47,12 @@ def _render_base_page(conventions: RendererConventions) -> CodeArtifact:
     )
 
 
-def _class_name(screen: Screen) -> str:
+def class_name(screen: Screen) -> str:
     return "".join(word.capitalize() for word in screen.name.split()) + "Page"
 
 
 def _property_name(element: Element) -> str:
     return slugify(element.descriptor.name)
-
-
-def _element_screen_map(screens: list[Screen]) -> dict[str, str]:
-    return {
-        element.id: screen.id for screen in screens for element in screen.elements
-    }
-
-
-_SCREEN_RESOLVING_VERBS = {"enter_text", "activate", "select", "toggle", "verify"}
-
-
-def _step_screen_id(step, element_screen: dict[str, str]) -> str | None:
-    if step.verb == "navigate":
-        return step.screen_ref
-    if step.verb in _SCREEN_RESOLVING_VERBS:
-        return element_screen.get(step.element_ref)
-    return None
-
-
-def _derive_transitions(
-    screens: list[Screen], scenarios: list[Scenario]
-) -> dict[str, dict[str, str]]:
-    """from_screen_id -> {to_screen_id: id of the element whose activation triggers it}.
-
-    Only `activate` steps are treated as transition triggers - clicking is
-    the one action that canonically means "this might navigate somewhere".
-    Derived purely from element-to-screen ownership (a declared fact),
-    never from step text/label similarity. If a scenario shows more than
-    one element triggering the same from -> to transition, the first one
-    encountered wins - deterministic given scenario order, not silently
-    arbitrary.
-    """
-    element_screen = _element_screen_map(screens)
-    transitions: dict[str, dict[str, str]] = {}
-    for scenario in scenarios:
-        steps = scenario.steps
-        for i in range(len(steps) - 1):
-            step = steps[i]
-            if step.verb != "activate":
-                continue
-            from_screen = element_screen.get(step.element_ref)
-            if from_screen is None:
-                continue
-            to_screen = _step_screen_id(steps[i + 1], element_screen)
-            if to_screen is None or to_screen == from_screen:
-                continue
-            transitions.setdefault(from_screen, {}).setdefault(
-                to_screen, step.element_ref
-            )
-    return transitions
 
 
 def _render_page_class(
@@ -110,13 +61,13 @@ def _render_page_class(
     screens_by_id: dict[str, Screen],
     conventions: RendererConventions,
 ) -> CodeArtifact:
-    class_name = _class_name(screen)
+    cls_name = class_name(screen)
     element_by_id = {element.id: element for element in screen.elements}
     lines = [
         f"from {conventions.pages_dir}.base_page import {conventions.base_page_class}",
         "",
         "",
-        f"class {class_name}({conventions.base_page_class}):",
+        f"class {cls_name}({conventions.base_page_class}):",
     ]
     if not screen.elements and not outgoing:
         lines.append("    pass")
@@ -186,8 +137,8 @@ def _render_transition_method(
 ) -> list[str]:
     lines = [
         f"    def go_to_{slugify(target_screen.name)}(self):",
-        f"        from {conventions.pages_dir}.{target_screen.id} import {_class_name(target_screen)}",
+        f"        from {conventions.pages_dir}.{target_screen.id} import {class_name(target_screen)}",
         f"        self.{triggering_property}.click()",
-        f"        return {_class_name(target_screen)}(self.page, self.base_url)",
+        f"        return {class_name(target_screen)}(self.page, self.base_url)",
     ]
     return lines

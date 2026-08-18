@@ -248,7 +248,7 @@ Templates live in `prompts/*.md`. They use Python's `.format(**kwargs)` for vari
 
 - `generators/playwright_generator.py` — legacy stub; raises `NotImplementedError`. Superseded by `renderer/` for Stage 4 codegen — not reused, not extended.
 - `models/automation.py` — Semantic Automation Model schema (Stage 4 design; see `.docs/architecture.md`). Fully implemented and unit-tested.
-- `renderer/` — deterministic `AutomationModel` → framework renderer (Stage 4; see `.docs/architecture.md`). `ScaffoldRenderer`, `PageObjectRenderer`, `DataRenderer`, `ApiClientRenderer` implemented. `TestRenderer` and the `FrameworkRenderer` composition root are not yet built. Nothing produces an `AutomationModel` yet (no perception agent), and no node or graph edge calls the renderer — it is exercised only by manual/unit-level checks so far.
+- `renderer/` — deterministic `AutomationModel` → framework renderer (Stage 4; see `.docs/architecture.md`). `ScaffoldRenderer`, `PageObjectRenderer`, `DataRenderer`, `ApiClientRenderer`, `TestRenderer` implemented and unit-tested (`tests/unit/test_test_renderer.py`). The `FrameworkRenderer` composition root is not yet built — nothing wires the per-artifact renderers together into one call. Nothing produces an `AutomationModel` yet (no perception agent), and no node or graph edge calls the renderer.
 
 Do not implement these unless explicitly asked.
 
@@ -325,10 +325,12 @@ renderer/
   naming.py                  ← slugify() - shared text-to-identifier helper
   scaffold_renderer.py       ← pytest.ini, conftest.py (base_url fixture)
   page_object_renderer.py    ← Screen/Element → page classes; ElementRole → locator strategy; scenario-derived navigation methods
+  transitions.py             ← derive_transitions() - shared page-transition inference (PageObjectRenderer + TestRenderer)
   data_renderer.py           ← DataProfile → typed constants / stdlib-only generator functions
   api_client_renderer.py     ← Operation → resource-grouped client classes; dataclass request bodies; env-var-sourced endpoint URLs
+  test_renderer.py           ← Scenario/Step → pytest test functions; all 9 step verbs; suitability/Unsupported skip routing
 tests/
-  unit/                      ← fast, no I/O (TraceabilityMatrix, PlannerDecision, review _check_* methods, automation model contracts, etc.)
+  unit/                      ← fast, no I/O (TraceabilityMatrix, PlannerDecision, review _check_* methods, automation model contracts, TestRenderer, etc.)
   contract/                  ← mocked LLM, schema validation, remediation loop end-to-end
   smoke/                     ← real LLM, schema-only assertions
   evals/                     ← real LLM, quality rubric

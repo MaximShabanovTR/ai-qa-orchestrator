@@ -344,6 +344,16 @@ Elements, operations, and data are declared once and referenced by ID. Steps are
 
 ---
 
+## TestRenderer's response-object shape is an unverified assumption; one response variable per scenario
+
+**Decision:** `TestRenderer` renders `call_operation` as `response = api.{method}(...)`, and `verify_response` as an `assert` against that variable using a `requests`-style shape: `response.status_code`, `response.json()`, `response.headers`. A scenario's steps share exactly one `response` variable — a later `call_operation` overwrites it.
+
+**Why the shape is a real gap, not a considered choice:** `BaseApiClient._request` (see "Channels" above) raises unconditionally — there is no live transport at design time, so nothing in this project has ever actually produced a response object to shape these assertions against. `requests`-style attributes are a reasonable, common-case guess, not a verified contract. Whatever Stage B's real transport implementation returns must either match this shape or `TestRenderer`'s `_RESPONSE_CONDITION_RENDERERS` table needs to change to match it — this is a known, tracked seam, not a hidden one.
+
+**Why one `response` variable, not one per operation:** matches `CallOperation`/`VerifyResponse`'s own step shape — a scenario's steps are a single linear sequence, and the common case (call, then check) needs no more. **Known limitation:** a scenario invoking two different operations with interleaved `verify_response` checks would have the second call silently overwrite the first's `response` before it's asserted on — there is no `operation_ref`-keyed disambiguation. Not yet hit by any real scenario; revisit if the test corpus produces one (same "wait for evidence, then extend" discipline as `Unsupported`'s vocabulary-promotion rule).
+
+---
+
 ## Model inputs: test cases own scenarios; the requirement grounds declarations
 
 **Decision:** Model generation consumes both the reviewed test cases and the `StructuredRequirement` (plus answered clarifications), with asymmetric authority:

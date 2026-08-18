@@ -98,7 +98,7 @@ def _render_endpoint_urls(resources: list[str], conventions: RendererConventions
     )
 
 
-def _endpoint_class_name(resource: str) -> str:
+def endpoint_class_name(resource: str) -> str:
     words = resource.replace("_", " ").replace("-", " ").split()
     return "".join(word.capitalize() for word in words) + "Endpoint"
 
@@ -109,7 +109,7 @@ def _render_endpoint_class(
     profiles_by_id: dict[str, DataProfile],
     conventions: RendererConventions,
 ) -> CodeArtifact:
-    class_name = _endpoint_class_name(resource)
+    class_name = endpoint_class_name(resource)
     lines = [
         "from dataclasses import asdict, dataclass",
         "",
@@ -153,7 +153,7 @@ def _render_client(
     ]
     for resource in resources:
         lines.append(
-            f"from {conventions.api_dir}.{slugify(resource)}_endpoint import {_endpoint_class_name(resource)}"
+            f"from {conventions.api_dir}.{slugify(resource)}_endpoint import {endpoint_class_name(resource)}"
         )
     lines.extend(["", ""])
     for operation in ungrouped:
@@ -167,7 +167,7 @@ def _render_client(
     )
     for resource in resources:
         lines.append(
-            f"        self.{slugify(resource)} = {_endpoint_class_name(resource)}()"
+            f"        self.{slugify(resource)} = {endpoint_class_name(resource)}()"
         )
     lines.append("")
     for operation in ungrouped:
@@ -181,7 +181,7 @@ def _render_client(
     )
 
 
-def _method_name(operation: Operation) -> str:
+def method_name(operation: Operation) -> str:
     return slugify(operation.intent)
 
 
@@ -193,7 +193,7 @@ def _method_params(operation: Operation) -> list[str]:
 
 
 def _request_model_name(operation: Operation) -> str:
-    return "".join(word.capitalize() for word in _method_name(operation).split("_")) + "Request"
+    return "".join(word.capitalize() for word in method_name(operation).split("_")) + "Request"
 
 
 def _render_request_model(
@@ -215,7 +215,7 @@ def _render_request_model(
 def _render_operation_method(operation: Operation) -> list[str]:
     params = _method_params(operation)
     param_list = ", " + ", ".join(params) if params else ""
-    lines = [f"    def {_method_name(operation)}(self{param_list}):"]
+    lines = [f"    def {method_name(operation)}(self{param_list}):"]
 
     if operation.binding is None:
         lines.append(

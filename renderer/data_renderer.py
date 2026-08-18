@@ -39,11 +39,11 @@ def _render_init(conventions: RendererConventions) -> CodeArtifact:
     )
 
 
-def _constant_name(profile: DataProfile) -> str:
+def constant_name(profile: DataProfile) -> str:
     return slugify(profile.name).upper()
 
 
-def _generator_name(profile: DataProfile) -> str:
+def generator_name(profile: DataProfile) -> str:
     return f"generate_{slugify(profile.name)}"
 
 
@@ -54,7 +54,7 @@ def _render_profile(profile: DataProfile) -> list[str]:
 
 
 def _render_literal_constant(profile: DataProfile) -> list[str]:
-    return [f"{_constant_name(profile)} = {repr(profile.literal_value)}", ""]
+    return [f"{constant_name(profile)} = {repr(profile.literal_value)}", ""]
 
 
 def _generate_text(profile: DataProfile) -> str:
@@ -116,7 +116,7 @@ _GENERATORS: dict[DataCategory, Callable[[DataProfile], str]] = {
 def _render_generator_function(profile: DataProfile) -> list[str]:
     if profile.category is not DataCategory.UNSUPPORTED and not (profile.constraints and profile.constraints.pattern):
         lines = []
-        lines.append(f"def {_generator_name(profile)}():")
+        lines.append(f"def {generator_name(profile)}():")
         lines.append(f"    return {_GENERATORS[profile.category](profile)}")
         lines.append("")
         return lines

@@ -247,11 +247,13 @@ ai-qa-orchestrator/
 │   ├── naming.py                    # slugify() - shared text-to-identifier helper
 │   ├── scaffold_renderer.py         # pytest.ini, conftest.py (base_url fixture)
 │   ├── page_object_renderer.py      # Screen/Element → page classes, navigation methods
+│   ├── transitions.py               # Shared page-transition inference (PageObjectRenderer + TestRenderer)
 │   ├── data_renderer.py             # DataProfile → typed constants / stdlib-only generators
-│   └── api_client_renderer.py       # Operation → resource-grouped client classes, dataclass request bodies
+│   ├── api_client_renderer.py       # Operation → resource-grouped client classes, dataclass request bodies
+│   └── test_renderer.py             # Scenario/Step → pytest test functions, all 9 step verbs
 │
 ├── tests/
-│   ├── unit/                        # Fast, no I/O — models, review checks, planner, automation contracts
+│   ├── unit/                        # Fast, no I/O — models, review checks, planner, automation contracts, renderer
 │   ├── contract/                    # Mocked LLM — agent wiring, remediation loop end-to-end
 │   ├── smoke/                       # Real LLM — schema-only assertions
 │   └── evals/                       # Real LLM — quality rubric
@@ -364,7 +366,7 @@ Penalty weights live in `ClarificationRound.completeness_score` in `models/clari
 | Test case review layer | Done | Deterministic + LLM hybrid `ReviewAgent`, advisory quality gate |
 | Remediation loop | Done | Deterministic `PlannerDecision` drives bounded regenerate-on-failure |
 | Semantic Automation Model | Designed | Framework-neutral schema for Playwright generation — see `.docs/architecture.md`; implemented in `models/automation.py`, not yet wired into the workflow |
-| Playwright test generation | In progress | Deterministic renderer: `AutomationModel` → runnable pytest/Playwright framework. `ScaffoldRenderer`/`PageObjectRenderer`/`DataRenderer`/`ApiClientRenderer` built; `TestRenderer`/`FrameworkRenderer` composition root pending. Not yet wired into the workflow. |
+| Playwright test generation | In progress | Deterministic renderer: `AutomationModel` → runnable pytest/Playwright framework. `ScaffoldRenderer`/`PageObjectRenderer`/`DataRenderer`/`ApiClientRenderer`/`TestRenderer` built and unit-tested; `FrameworkRenderer` composition root pending. Not yet wired into the workflow. |
 
 ---
 
