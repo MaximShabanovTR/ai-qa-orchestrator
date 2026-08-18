@@ -1,0 +1,161 @@
+=== pytest.ini (scaffold, source=deterministic) ===
+[pytest]
+testpaths = tests
+
+=== conftest.py (scaffold, source=deterministic) ===
+import pytest
+
+
+@pytest.fixture
+def base_url() -> str:
+    return "http://localhost:3000"
+
+=== pages/__init__.py (page_object, source=deterministic) ===
+
+=== pages/base_page.py (page_object, source=deterministic) ===
+class BasePage:
+    def __init__(self, page, base_url: str) -> None:
+        self.page = page
+        self.base_url = base_url
+
+    def navigate(self, path: str) -> None:
+        self.page.goto(f"{self.base_url}{path}")
+
+=== pages/login.py (page_object, source=deterministic) ===
+from pages.base_page import BasePage
+
+
+class LoginPage(BasePage):
+    @property
+    def username(self):
+        return self.page.get_by_role("textbox", name='Username')
+
+    @property
+    def submit(self):
+        return self.page.get_by_role("button", name='Submit')
+
+    def go_to_dashboard(self):
+        from pages.dashboard import DashboardPage
+        self.submit.click()
+        return DashboardPage(self.page, self.base_url)
+
+=== pages/dashboard.py (page_object, source=deterministic) ===
+from pages.base_page import BasePage
+
+
+class DashboardPage(BasePage):
+    @property
+    def welcome_banner(self):
+        return self.page.get_by_text('Welcome Banner')
+
+
+=== api/__init__.py (api_client, source=deterministic) ===
+
+=== api/base_client.py (api_client, source=deterministic) ===
+class BaseApiClient:
+    def __init__(self, base_url: str) -> None:
+        self.base_url = base_url
+
+    def _request(self, method: str, path: str, **kwargs):
+        raise NotImplementedError(
+            "HTTP transport not implemented at design time - "
+            "wire up a real client in a Stage B fixture"
+        )
+
+    def get(self, path: str, **kwargs):
+        return self._request("GET", path, **kwargs)
+
+    def post(self, path: str, **kwargs):
+        return self._request("POST", path, **kwargs)
+
+    def put(self, path: str, **kwargs):
+        return self._request("PUT", path, **kwargs)
+
+    def patch(self, path: str, **kwargs):
+        return self._request("PATCH", path, **kwargs)
+
+    def delete(self, path: str, **kwargs):
+        return self._request("DELETE", path, **kwargs)
+
+
+=== api/endpoint_urls.py (api_client, source=deterministic) ===
+import os
+
+
+ENDPOINT_URLS = {
+    "default": os.environ.get("DEFAULT_BASE_URL", ""),
+    "payments": os.environ.get("PAYMENTS_BASE_URL", ""),
+}
+
+
+=== api/payments_endpoint.py (api_client, source=deterministic) ===
+from dataclasses import asdict, dataclass
+
+from api.base_client import BaseApiClient
+from api.endpoint_urls import ENDPOINT_URLS
+
+
+@dataclass
+class SubmitPaymentRequest:
+    order_id: str
+
+
+class PaymentsEndpoint(BaseApiClient):
+    def __init__(self) -> None:
+        super().__init__(ENDPOINT_URLS["payments"])
+
+    def submit_payment(self, order_id):
+        request = SubmitPaymentRequest(order_id=order_id)
+        return self.post("/api/payments", json=asdict(request))
+
+
+=== api/client.py (api_client, source=deterministic) ===
+from dataclasses import asdict, dataclass
+
+from api.base_client import BaseApiClient
+from api.endpoint_urls import ENDPOINT_URLS
+from api.payments_endpoint import PaymentsEndpoint
+
+
+class ApiClient(BaseApiClient):
+    def __init__(self) -> None:
+        super().__init__(ENDPOINT_URLS["default"])
+        self.payments = PaymentsEndpoint()
+
+
+=== data/__init__.py (data_factory, source=deterministic) ===
+
+=== data/profiles.py (data_factory, source=deterministic) ===
+import random
+import string
+from datetime import date, datetime, timedelta
+
+
+ORDER_ID = 'ORD-1'
+
+
+=== tests/__init__.py (test, source=deterministic) ===
+
+=== tests/test_scenarios.py (test, source=deterministic) ===
+import pytest
+
+from playwright.sync_api import expect
+from api.client import ApiClient
+from pages.login import LoginPage
+
+
+# Scenario: s_login | Test Case: TC-1
+def test_tc_1(page, base_url):
+    page_obj = LoginPage(page, base_url)
+    page_obj.navigate('/login')
+    page_obj.username.fill('demo_user')
+    page_obj = page_obj.go_to_dashboard()
+    expect(page_obj.welcome_banner).to_be_visible()
+
+
+# Scenario: s_payment | Test Case: TC-2
+def test_tc_2(page, base_url):
+    api = ApiClient()
+    response = api.payments.submit_payment(order_id='ORD-1')
+
+

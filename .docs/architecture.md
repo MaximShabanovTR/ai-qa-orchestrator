@@ -300,9 +300,57 @@ Elements, operations, and data are declared once and referenced by ID. Steps are
 
 **API operation descriptors capture capability, never contract:** `intent`, `logical_inputs` (data profile refs), `expected_outcome_class` (success / rejection / validation error). This is derivable from requirement text ("the user can subscribe" states the capability). Transport details (method, path, payload shape, auth) live in an optional `binding` sub-object with a hard rule: **it may only be populated from information explicitly present in the requirement** — otherwise it stays `None`. The LLM never fills contract gaps with plausible REST conventions.
 
-**Renderer behavior:** the API client is generated as an interface with a visibly stubbed transport implementation ("contract unknown at generation time"), localized to one file. Test functions are fully real — they call client methods and assert on outcome class. The contract-shaped hole is typed, visible, and countable as a finding.
+**Renderer behavior:** the client splits into two layers. `BaseApiClient` provides generic `get`/`post`/`put`/`patch`/`delete` builders, all funnelling into one shared `_request(method, path, **kwargs)` — that single method is the actual stub ("HTTP transport not implemented at design time"), since sending a real request needs a live base URL and auth wiring that don't exist until Stage B fixtures. Per-`Operation` methods on `ApiClient` are **not** all stubs: when `operation.binding` is set, the method is real, deterministic call-construction code (`return self.post("/api/payments", json={...})`) built from the known method/path — it still raises when actually invoked, but only because the shared transport isn't wired up, not because the call itself is unknown. Only operations with `binding is None` raise for their own reason ("contract unknown at generation time"). Test functions are fully real either way — they call client methods and assert on outcome class. The contract-shaped hole is typed, visible, localized to `_request`, and countable as a finding.
 
 **Why:** the UI/API grounding asymmetry is real — UI targets are observations from requirement text; API bindings are assumptions. The model encodes the asymmetry structurally instead of papering over it.
+
+---
+
+## Operation resource grouping + environment-sourced endpoint URLs
+
+**Decision:** `Operation` gains an optional `resource: str | None = None` field. `ApiClientRenderer` groups operations by `resource` into one `{Resource}Endpoint(BaseApiClient)` class per distinct value; operations with `resource is None` stay directly on the root `ApiClient`. `ApiClient` composes named endpoints as attributes (`self.payments = PaymentsEndpoint()`). Each `Endpoint`'s base URL is not stored in the model at all — it's read at runtime from a generated, environment-sourced config (`ENDPOINT_URLS`, keyed by resource name, populated from `os.environ.get(...)`).
+
+**Why grounded by test cases, not requirements:** an `Operation` only exists in the model because some test case's steps call it (`CallOperation`/`VerifyResponse` referencing it) — per the existing "test cases are the sole source of scenarios" rule. `resource` follows the same grounding: it's derived from the test case's own action text (which names the resource being exercised), not the higher-level requirement, consistent with how the operation itself was discovered.
+
+**Why optional:** not every operation will cleanly resolve to a named resource (mirrors why `binding` is optional) — grouping is a bonus organizational signal, not a required one, and ungrouped operations still work correctly on the flat `ApiClient`.
+
+**Why base URL lives in a config file, not the model:** a resource's base URL differs per deployment environment (dev/staging/prod) but its relative path does not — `OperationBinding.path` is already environment-independent model data. Base URL is pure environment configuration, not something extractable from a requirement or test case, so it was never a good fit for `AutomationModel`. Sourcing it from `os.environ` at runtime (rather than baking a `{resource: {env: url}}` structure into a generated file) means switching environments never touches generated code — the same "renderer generates structure, human supplies environment-specific values" pattern already used for `base_url` in `ScaffoldRenderer`'s `conftest.py` fixture, just extended per-resource.
+
+**Trade-off:** this bends "declared not inferred" slightly — nothing forces every real resource to get a `resource` value; a perception step choosing not to populate it degrades gracefully to the flat client, so under-grouping is possible but never produces incorrect code, only a less-organized one.
+
+---
+
+## Screen path grounds Navigate rendering
+
+**Decision:** `Screen` gains an optional `path: str | None = None` field. `TestRenderer` renders a scenario's opening `Navigate` step as `self.navigate(screen.path)` when `screen.path` is set; when it's `None`, the step renders as an honest gap (raise), same tier as an unbound `Operation`.
+
+**Why this was missing:** `Screen` originally had only `id`/`name`/`elements` — enough for `PageObjectRenderer` to build page classes and derive transition methods (clicking through screens never needed a URL), but a scenario's *first* `Navigate` step means "the browser opens this screen," which requires an actual URL that nothing in the model captured. Rendering it as bare page-object instantiation with no real `.navigate()` call would silently produce a broken test — locators would fail against whatever page the browser happened to already be on, with no error pointing at the real cause (a missing URL, not a missing element).
+
+**Why grounded by the requirement, like `OperationBinding.path`:** unlike `Operation.resource` (organizational, derived from test case action text), a screen's path is the same kind of fact as an API binding's path — a literal, network-facing detail that must come from explicit input text, never inferred. Same hard rule as `OperationBinding`: populated only when the requirement explicitly states it, `None` otherwise, never a plausible-looking guessed route.
+
+**Why optional, and why transitions don't need it:** most `Navigate` steps in practice aren't a scenario's opening step — `PageObjectRenderer`'s derived `go_to_*` methods already handle mid-scenario navigation via clicks, no URL required. `path` only matters for the entry point, so it's fine for most `Screen`s to never populate it.
+
+---
+
+## Typed API request bodies with individual-param method signatures
+
+**Decision:** `ApiClientRenderer` additionally consumes `data_profiles`. For each `logical_inputs` entry with a resolvable `DataProfile`, its `DataCategory` maps to a concrete Python type (`NUMBER→float`, `BOOLEAN→bool`, `TEXT`/`EMAIL`/`URL`/`DATE`/`DATETIME→str`), and each bound operation's method generates a `@dataclass` `{MethodName}Request` with those typed fields — stdlib `dataclasses`, not Pydantic, per the "zero third-party runtime dependencies" decision, which applies here too (Pydantic v2's validation core is a compiled Rust extension, not a pure-Python package — a materially bigger install ask than stdlib in a locked-down environment, and not a hard requirement for the generated tests to run the way `pytest`/`pytest-playwright` are). The method signature itself keeps individual named parameters (`def submit_payment(self, order_id, amount):`) — the request object is constructed *inside* the method, then serialized (`dataclasses.asdict(request)`) for the transport call; callers never construct or see the dataclass type directly.
+
+**Why individual params, not a caller-supplied object:** `CallOperation.inputs: dict[str, DataRef]` is already a flat, named mapping at the model level — `TestRenderer` (Task 11) will render calls directly from that shape. Keyword arguments map onto it with no intermediate step; requiring callers to construct a typed object first would mean `TestRenderer` also has to know how to build and import that object per operation, for no benefit.
+
+**Trade-off vs. Pydantic:** a `@dataclass` documents the expected shape and gives IDE support, but doesn't validate types at construction the way Pydantic would. Accepted because the data flowing into these request objects is already produced by a guaranteed-correct pipeline (`DataRenderer`'s category-derived generators, `DataProfile`'s own literal-value validator) — the narrower remaining risk (a human hand-editing generated test code with a wrong type) doesn't justify the portability cost of a compiled third-party dependency.
+
+**Deferred to TestRenderer:** a "baseline request + scenario-specific overrides" pattern (each scenario only naming what it deviates from) is a good idea but isn't `ApiClientRenderer`'s decision — the model has no declared concept of a canonical/default value per field, only per-scenario `CallOperation.inputs`. Individual-param method signatures are what make this pattern possible later (`client.submit_payment(**{**defaults, **overrides})`), without `ApiClientRenderer` needing to know anything about it now.
+
+---
+
+## TestRenderer's response-object shape is an unverified assumption; one response variable per scenario
+
+**Decision:** `TestRenderer` renders `call_operation` as `response = api.{method}(...)`, and `verify_response` as an `assert` against that variable using a `requests`-style shape: `response.status_code`, `response.json()`, `response.headers`. A scenario's steps share exactly one `response` variable — a later `call_operation` overwrites it.
+
+**Why the shape is a real gap, not a considered choice:** `BaseApiClient._request` (see "Channels" above) raises unconditionally — there is no live transport at design time, so nothing in this project has ever actually produced a response object to shape these assertions against. `requests`-style attributes are a reasonable, common-case guess, not a verified contract. Whatever Stage B's real transport implementation returns must either match this shape or `TestRenderer`'s `_RESPONSE_CONDITION_RENDERERS` table needs to change to match it — this is a known, tracked seam, not a hidden one.
+
+**Why one `response` variable, not one per operation:** matches `CallOperation`/`VerifyResponse`'s own step shape — a scenario's steps are a single linear sequence, and the common case (call, then check) needs no more. **Known limitation:** a scenario invoking two different operations with interleaved `verify_response` checks would have the second call silently overwrite the first's `response` before it's asserted on — there is no `operation_ref`-keyed disambiguation. Not yet hit by any real scenario; revisit if the test corpus produces one (same "wait for evidence, then extend" discipline as `Unsupported`'s vocabulary-promotion rule).
 
 ---
 
@@ -354,6 +402,28 @@ Each artifact renderer is a pure function `(model slice, conventions) → list[C
 **Framework is the unit of generation:** output is a maintainable project (`pages/`, `tests/`, `api/`, `fixtures/`, `utils/`, config), not loose spec files. Render target: **Python + pytest + playwright-python** (one language across the project; pytest fixtures map onto the fixtures concept).
 
 **Guardrail:** modules with a common signature, full stop — no renderer plugin registry, no abstract factories, no dynamic discovery.
+
+---
+
+## Transition rendering is per-scenario; the aggregate transition map is PageObjectRenderer's alone
+
+**Decision:** `derive_transitions()` (`renderer/transitions.py`) builds one aggregate `{from_screen: {to_screen: element_id}}` map across every scenario, using `setdefault` so the first scenario to register an edge wins. That aggregate map is the correct input for exactly one thing: deciding which `go_to_*` methods `PageObjectRenderer` generates on a page class — a page class needs to expose every transition *any* scenario in the corpus might trigger from it. It is **not** a valid input for `TestRenderer`'s own per-step decision. Whether a specific `activate` step in a specific scenario should render as a transition call (`page_obj = page_obj.go_to_x()`) or a plain click (`page_obj.button.click()`) must be decided from *that scenario's own next step* — `TestRenderer` looks ahead at `scenario.steps[i+1]` directly (the same `step_screen_id()` lookahead `derive_transitions()` already does internally while building its map) and only consults the aggregate map afterward, to confirm a `go_to_*` method actually exists for that specific `(from, to)` pair.
+
+**Why this matters — the failure mode without it:** two scenarios can legitimately activate the *same element* with different outcomes — a happy-path login (Submit → Dashboard) and an invalid-credentials login (Submit → stays on Login, shows an error). If the transition-vs-click decision were made from the aggregate map alone, the second scenario would incorrectly render the first's `go_to_dashboard()` call, silently pointing `page_obj` at the wrong page class for every step that follows — a semantically broken test that still parses and still compiles, only failing with a confusing `AttributeError` when pytest actually runs it. Since negative-path coverage (validation errors, permission-denied, invalid input) is a stated core deliverable of this whole system, and "same control, different outcome depending on input validity" is close to the canonical shape of a negative test case, this was a real correctness gap, not a hypothetical one.
+
+**Corollary:** any future renderer that needs to reason about "what does clicking X do" must ask the same question — *from this scenario's own evidence*, not from a corpus-wide aggregate — unless it is specifically building a *capability* (like a page class's full method set), where the aggregate is exactly what's wanted.
+
+---
+
+## Generated framework has zero third-party runtime dependencies
+
+**Decision:** Renderer output may import only `pytest`, `pytest-playwright`, and the Python standard library — never a third-party package such as `Faker`. This applies to every artifact renderer, but is most consequential for `DataRenderer`'s constraint-driven generators (`random`/`string`/`datetime` only).
+
+**Why:** the generated framework runs on whatever machine the end QA team has, frequently a locked-down corporate VDI with no outbound package-index access or an approval process for new dependencies. A generated automation project that fails `pip install` is worse than one with less realistic test data. This is a stronger bar than "avoid unnecessary dependencies" in the orchestrator's own `requirements.txt` — it is a hard constraint on code handed to someone else's environment, not a style preference for this codebase.
+
+**Consequence for `DataCategory` generation:** `NUMBER`, `BOOLEAN`, and unconstrained-length `TEXT` are trivially stdlib (`random`). `EMAIL`/`URL`/`DATE`/`DATETIME` don't actually need Faker's realism either — test data only needs to be syntactically valid for its category, not naturalistic, so a synthetic stdlib value (e.g. `f"user{random.randint(...)}@example.com"`) is sufficient. The one case stdlib genuinely cannot cover honestly is `TEXT` with a `pattern` constraint — matching an arbitrary regex is a real algorithmic gap, not a missing-dependency problem, so it renders as an honest gap (`source="unsupported"`) rather than an ad hoc partial implementation. `DataCategory.UNSUPPORTED` is the same tier by definition.
+
+**Trade-off:** this costs generation coverage, not correctness — the model already has the vocabulary (`source="unsupported"`) to express "cannot generate this" honestly rather than silently degrading. Revisit only if telemetry shows `pattern`-constrained profiles are common enough to justify a dependency, and even then the choice belongs to whoever owns the target deployment environment, not the renderer.
 
 ---
 
