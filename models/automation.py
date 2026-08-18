@@ -183,6 +183,7 @@ class Screen(BaseModel):
     id: str
     name: str
     elements: list[Element] = []
+    path: str | None = None
 
 
 class OperationBinding(BaseModel):
@@ -196,6 +197,7 @@ class Operation(BaseModel):
     logical_inputs: list[str] = []
     expected_outcome_class: Literal["success", "rejection", "validation_error"]
     binding: OperationBinding | None = None
+    resource: str | None = None
 
 
 # More categories to be added based on usage frequency demand

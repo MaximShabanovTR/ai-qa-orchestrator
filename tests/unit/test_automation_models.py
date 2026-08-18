@@ -185,6 +185,13 @@ def test_call_operation_resolves_nested_data_refs():
 def test_screen_defaults_to_empty_elements():
     screen = Screen(id="SCR-001", name="Login")
     assert screen.elements == []
+    assert screen.path is None
+
+
+@pytest.mark.unit
+def test_screen_accepts_stated_path():
+    screen = Screen(id="SCR-001", name="Login", path="/login")
+    assert screen.path == "/login"
 
 
 @pytest.mark.unit
@@ -202,6 +209,18 @@ def test_operation_binding_defaults_to_none():
     op = Operation(id="OP-001", intent="create subscription", expected_outcome_class="success")
     assert op.binding is None
     assert op.logical_inputs == []
+    assert op.resource is None
+
+
+@pytest.mark.unit
+def test_operation_accepts_stated_resource():
+    op = Operation(
+        id="OP-001",
+        intent="create subscription",
+        expected_outcome_class="success",
+        resource="subscriptions",
+    )
+    assert op.resource == "subscriptions"
 
 
 @pytest.mark.unit

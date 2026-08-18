@@ -91,7 +91,8 @@ api/app.py (FastAPI)
 | Agents | `agents/` | Single-responsibility Claude callers; stateless |
 | Models | `models/` | Typed Pydantic contracts between all layers |
 | Services | `services/` | Claude SDK wrapper, file output writers |
-| Generators | `generators/` | Code generation (Playwright phase — stubbed) |
+| Generators | `generators/` | Legacy pre-Stage-4 stub; superseded by `renderer/` |
+| Renderer | `renderer/` | Deterministic `AutomationModel` → Playwright/pytest framework code (complete, not yet wired into the workflow) |
 | Prompts | `prompts/` | Markdown templates loaded at runtime |
 
 ### Data flow
@@ -239,10 +240,22 @@ ai-qa-orchestrator/
 │
 ├── generators/
 │   ├── base_generator.py            # Abstract: test cases → runnable files
-│   └── playwright_generator.py      # Playwright/TypeScript (stub)
+│   └── playwright_generator.py      # Legacy stub, superseded by renderer/
+│
+├── renderer/                        # Deterministic AutomationModel → Playwright/pytest framework (Stage 4, complete, not yet wired in)
+│   ├── models.py                    # CodeArtifact, FrameworkManifest, RendererConventions
+│   ├── naming.py                    # slugify() - shared text-to-identifier helper
+│   ├── scaffold_renderer.py         # pytest.ini, conftest.py (base_url fixture)
+│   ├── page_object_renderer.py      # Screen/Element → page classes, navigation methods
+│   ├── transitions.py               # Shared page-transition inference (PageObjectRenderer + TestRenderer)
+│   ├── data_renderer.py             # DataProfile → typed constants / stdlib-only generators
+│   ├── api_client_renderer.py       # Operation → resource-grouped client classes, dataclass request bodies
+│   ├── test_renderer.py             # Scenario/Step → pytest test functions, all 9 step verbs
+│   └── framework_renderer.py        # FrameworkRenderer composition root — calls all five render_* functions, returns one FrameworkManifest
 │
 ├── tests/
-│   ├── unit/                        # Fast, no I/O — models, review checks, planner, automation contracts
+│   ├── unit/                        # Fast, no I/O — models, review checks, planner, automation contracts, renderer
+│   │   └── golden/                  # Golden-file fixtures for the most stable renderer outputs
 │   ├── contract/                    # Mocked LLM — agent wiring, remediation loop end-to-end
 │   ├── smoke/                       # Real LLM — schema-only assertions
 │   └── evals/                       # Real LLM — quality rubric
@@ -355,7 +368,7 @@ Penalty weights live in `ClarificationRound.completeness_score` in `models/clari
 | Test case review layer | Done | Deterministic + LLM hybrid `ReviewAgent`, advisory quality gate |
 | Remediation loop | Done | Deterministic `PlannerDecision` drives bounded regenerate-on-failure |
 | Semantic Automation Model | Designed | Framework-neutral schema for Playwright generation — see `.docs/architecture.md`; implemented in `models/automation.py`, not yet wired into the workflow |
-| Playwright test generation | Planned | Deterministic renderer: `AutomationModel` → runnable pytest/Playwright framework |
+| Playwright test generation | Done (renderer) | Deterministic renderer: `AutomationModel` → runnable pytest/Playwright framework. `ScaffoldRenderer`/`PageObjectRenderer`/`DataRenderer`/`ApiClientRenderer`/`TestRenderer` plus the `FrameworkRenderer` composition root are built with full unit and golden-file test coverage (`tests/unit/golden/`). No perception agent produces an `AutomationModel` yet, and the renderer is not wired into the workflow. |
 
 ---
 

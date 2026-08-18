@@ -14,7 +14,7 @@ This is not a chatbot or a generic agent framework. It is a focused, domain-spec
 
 ## Architecture
 
-Eight layers. Each has a single responsibility. They communicate only through Pydantic models — no raw dicts, no string passing between layers.
+Nine layers. Each has a single responsibility. They communicate only through Pydantic models — no raw dicts, no string passing between layers.
 
 ```
 api/app.py (FastAPI)
@@ -37,7 +37,8 @@ api/app.py (FastAPI)
 | Models | `models/` | Pydantic data contracts between all layers |
 | Services | `services/` | Anthropic SDK wrapper, JSON/Markdown serializers |
 | Prompts | `prompts/` | Markdown templates with `{placeholder}` variables |
-| Generators | `generators/` | Code generation — Playwright stub, not yet implemented |
+| Generators | `generators/` | Legacy pre-Stage-4 stub; superseded by `renderer/`, not extended |
+| Renderer | `renderer/` | Deterministic `AutomationModel` → Playwright/pytest framework code (Stage 4; complete, not yet wired in) |
 
 ---
 
@@ -245,8 +246,9 @@ Templates live in `prompts/*.md`. They use Python's `.format(**kwargs)` for vari
 
 ## What is not yet implemented
 
-- `generators/playwright_generator.py` — stub only; raises `NotImplementedError`
-- `models/automation.py` — Semantic Automation Model schema (Stage 4 design; see `.docs/architecture.md`). Fully implemented and unit-tested, but not yet wired into any agent, node, or the workflow graph — nothing produces or consumes an `AutomationModel` yet.
+- `generators/playwright_generator.py` — legacy stub; raises `NotImplementedError`. Superseded by `renderer/` for Stage 4 codegen — not reused, not extended.
+- `models/automation.py` — Semantic Automation Model schema (Stage 4 design; see `.docs/architecture.md`). Fully implemented and unit-tested.
+- `renderer/` — deterministic `AutomationModel` → framework renderer (Stage 4; see `.docs/architecture.md`). All six modules (`ScaffoldRenderer`, `PageObjectRenderer`, `DataRenderer`, `ApiClientRenderer`, `TestRenderer`, `FrameworkRenderer`) are implemented with full unit test coverage (`tests/unit/test_*.py` per module) including golden-file comparisons for the most stable outputs (`tests/unit/golden/`). Nothing produces an `AutomationModel` yet (no perception agent), and no node or graph edge calls the renderer.
 
 Do not implement these unless explicitly asked.
 
@@ -316,9 +318,21 @@ services/
   output_writer.py
 generators/
   base_generator.py
-  playwright_generator.py    ← stub
+  playwright_generator.py    ← legacy stub, superseded by renderer/
+renderer/
+  __init__.py
+  models.py                  ← CodeArtifact, FrameworkManifest, RendererConventions
+  naming.py                  ← slugify() - shared text-to-identifier helper
+  scaffold_renderer.py       ← pytest.ini, conftest.py (base_url fixture)
+  page_object_renderer.py    ← Screen/Element → page classes; ElementRole → locator strategy; scenario-derived navigation methods
+  transitions.py             ← derive_transitions() - shared page-transition inference (PageObjectRenderer + TestRenderer)
+  data_renderer.py           ← DataProfile → typed constants / stdlib-only generator functions
+  api_client_renderer.py     ← Operation → resource-grouped client classes; dataclass request bodies; env-var-sourced endpoint URLs
+  test_renderer.py           ← Scenario/Step → pytest test functions; all 9 step verbs; suitability/Unsupported skip routing
+  framework_renderer.py      ← FrameworkRenderer composition root: calls all five render_* functions, concatenates into one FrameworkManifest
 tests/
-  unit/                      ← fast, no I/O (TraceabilityMatrix, PlannerDecision, review _check_* methods, automation model contracts, etc.)
+  unit/                      ← fast, no I/O (TraceabilityMatrix, PlannerDecision, review _check_* methods, automation model contracts, all six renderer modules, etc.)
+    golden/                  ← golden-file fixtures for the most stable renderer outputs (scaffold, full FrameworkManifest example)
   contract/                  ← mocked LLM, schema validation, remediation loop end-to-end
   smoke/                     ← real LLM, schema-only assertions
   evals/                     ← real LLM, quality rubric
