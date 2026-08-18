@@ -1,6 +1,6 @@
 from models.automation import Element, ElementRole, Scenario, Screen
 from renderer.models import ArtifactKind, CodeArtifact, RendererConventions
-from renderer.naming import slugify
+from renderer.naming import pascal_case_identifier, slugify
 from renderer.transitions import derive_transitions
 
 
@@ -48,12 +48,7 @@ def _render_base_page(conventions: RendererConventions) -> CodeArtifact:
 
 
 def class_name(screen: Screen) -> str:
-    name = "".join(word.capitalize() for word in screen.name.split()) + "Page"
-    # A screen name that starts with a digit (e.g. "3D Viewer") would otherwise
-    # produce an invalid Python identifier ("3dViewerPage") - mirror slugify's
-    # digit-leading guard here since this name-building path doesn't go through
-    # slugify() itself.
-    return f"_{name}" if name[:1].isdigit() else name
+    return pascal_case_identifier(screen.name) + "Page"
 
 
 def _property_name(element: Element) -> str:
@@ -95,7 +90,7 @@ def _render_page_class(
         )
     content = "\n".join(lines) + "\n"
     return CodeArtifact(
-        path=f"{conventions.pages_dir}/{screen.id}.py",
+        path=f"{conventions.pages_dir}/{slugify(screen.id)}.py",
         content=content,
         kind=ArtifactKind.PAGE_OBJECT,
         provenance=[screen.id],
@@ -142,7 +137,7 @@ def _render_transition_method(
 ) -> list[str]:
     lines = [
         f"    def go_to_{slugify(target_screen.name)}(self):",
-        f"        from {conventions.pages_dir}.{target_screen.id} import {class_name(target_screen)}",
+        f"        from {conventions.pages_dir}.{slugify(target_screen.id)} import {class_name(target_screen)}",
         f"        self.{triggering_property}.click()",
         f"        return {class_name(target_screen)}(self.page, self.base_url)",
     ]

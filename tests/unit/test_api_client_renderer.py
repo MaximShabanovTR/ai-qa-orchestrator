@@ -6,6 +6,7 @@ from models.automation import DataCategory, DataProfile, Operation, OperationBin
 from renderer.api_client_renderer import (
     _CATEGORY_TYPES,
     _method_params,
+    _request_model_name,
     endpoint_class_name,
     method_name,
     render_api_client,
@@ -210,6 +211,91 @@ def test_endpoint_class_name_prefixes_underscore_when_digit_leading():
     )
     for artifact in artifacts.values():
         compile(artifact.content, artifact.path, "exec")
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "resource,expected",
+    [
+        ("api.v1", "ApiV1Endpoint"),  # dot
+        ("order/items", "OrderItemsEndpoint"),  # slash
+        ("O'Brien Resource", "OBrienResourceEndpoint"),  # apostrophe
+    ],
+)
+def test_endpoint_class_name_handles_general_non_alphanumeric_punctuation(resource, expected):
+    # Regression test: endpoint_class_name used to only normalize "_" and
+    # "-" via .replace() before splitting on whitespace, which missed dots,
+    # slashes, and other punctuation - e.g. endpoint_class_name("api.v1")
+    # produced "Api.v1Endpoint", a SyntaxError. It now routes through
+    # pascal_case_identifier, which tokenizes on any run of
+    # non-alphanumeric characters.
+    result = endpoint_class_name(resource)
+    assert result == expected
+    assert result.isidentifier()
+    compile(f"class {result}: pass", "<test>", "exec")
+
+
+# --- _request_model_name: the slugify-then-resplit trap ---
+
+@pytest.mark.unit
+def test_request_model_name_avoids_slugify_resplit_trap():
+    # Regression test for the subtlest bug in this class: _request_model_name
+    # used to derive its name from method_name(operation).split("_") - i.e.
+    # slugify(operation.intent) split back apart on "_". For
+    # intent="3D Model Sync", slugify produces "_3d_model_sync" (with a
+    # digit-leading guard already applied). Splitting that on "_" gives
+    # ['', '3d', 'model', 'sync']: "3d".capitalize() == "3d" (no letter at
+    # position 0 to capitalize) and the empty string from the leading "_"
+    # vanishes on join - so the guard is silently lost, producing
+    # "3dModelSyncRequest", not a valid Python identifier.
+    #
+    # The fix derives the name directly from the raw operation.intent via
+    # pascal_case_identifier, which tokenizes the raw text and applies the
+    # digit-leading guard to the FINAL PascalCase result instead.
+    operation = _op(id="o1", intent="3D Model Sync")
+
+    # Document the old broken derivation for contrast.
+    old_broken = "".join(w.capitalize() for w in method_name(operation).split("_")) + "Request"
+    assert old_broken == "3dModelSyncRequest"
+    assert not old_broken.isidentifier()
+
+    result = _request_model_name(operation)
+    assert result == "_3dModelSyncRequest"
+    assert result.isidentifier()
+
+
+@pytest.mark.unit
+def test_request_model_name_end_to_end_compiles_with_digit_leading_intent():
+    artifacts = artifacts_by_path(
+        [
+            _op(
+                id="o1", resource="payments", intent="3D Model Sync",
+                logical_inputs=["thing"],
+                binding=OperationBinding(method="POST", path="/p"),
+            )
+        ]
+    )
+    content = artifacts["api/payments_endpoint.py"].content
+    assert "class _3dModelSyncRequest:" in content
+    compile(content, "api/payments_endpoint.py", "exec")
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "intent,expected",
+    [
+        ("Submit Payment", "SubmitPaymentRequest"),
+        ("api.v1 Call", "ApiV1CallRequest"),  # dot
+        ("Sync API's Data", "SyncApiSDataRequest"),  # apostrophe
+        ("3-Way Merge", "_3WayMergeRequest"),  # digit + hyphen leading
+    ],
+)
+def test_request_model_name_derives_from_raw_intent(intent, expected):
+    operation = _op(id="o1", intent=intent)
+    result = _request_model_name(operation)
+    assert result == expected
+    assert result.isidentifier()
+    compile(f"class {result}: pass", "<test>", "exec")
 
 
 # --- request model / dataclass field type dispatch: exhaustive over _CATEGORY_TYPES ---

@@ -17,8 +17,11 @@ def render_data(
     data_profiles: list[DataProfile], conventions: RendererConventions
 ) -> list[CodeArtifact]:
     lines = list(_HEADER)
+    has_gap = False
     for profile in data_profiles:
-        lines.extend(_render_profile(profile))
+        profile_lines, is_gap = _render_profile(profile)
+        lines.extend(profile_lines)
+        has_gap = has_gap or is_gap
     content = "\n".join(lines) + "\n"
     return [
         _render_init(conventions),
@@ -26,6 +29,7 @@ def render_data(
             path=f"{conventions.data_dir}/profiles.py",
             content=content,
             kind=ArtifactKind.DATA_FACTORY,
+            source="unsupported" if has_gap else "deterministic",
             provenance=[profile.id for profile in data_profiles],
         ),
     ]
@@ -47,9 +51,15 @@ def generator_name(profile: DataProfile) -> str:
     return f"generate_{slugify(profile.name)}"
 
 
-def _render_profile(profile: DataProfile) -> list[str]:
+def _render_profile(profile: DataProfile) -> tuple[list[str], bool]:
+    """Returns (source_lines, is_honest_gap).
+
+    is_honest_gap is True when the rendered generator function's body
+    raises NotImplementedError when called, rather than returning a
+    value - see _render_generator_function.
+    """
     if profile.literal_value is not None:
-        return _render_literal_constant(profile)
+        return _render_literal_constant(profile), False
     return _render_generator_function(profile)
 
 
@@ -113,12 +123,35 @@ _GENERATORS: dict[DataCategory, Callable[[DataProfile], str]] = {
 }
 
 
-def _render_generator_function(profile: DataProfile) -> list[str]:
+def _render_generator_function(profile: DataProfile) -> tuple[list[str], bool]:
+    """Renders a generator function definition for `profile`.
+
+    Two cases, both of which return normally - rendering source code must
+    never raise (see .docs/architecture.md, "Generated framework has zero
+    third-party runtime dependencies"): a single UNSUPPORTED-category or
+    pattern-constrained profile must not abort the whole framework render.
+
+    - Deterministic case: the function body returns a stdlib-generated
+      value.
+    - Honest-gap case (UNSUPPORTED category, or a pattern-constrained
+      profile - stdlib genuinely cannot generate an arbitrary regex
+      match): the function is still syntactically valid and importable,
+      but its body raises NotImplementedError - the failure only surfaces
+      if a generated test actually calls this specific generator, same
+      tier as TestRenderer's Unsupported-step skip.
+    """
     if profile.category is not DataCategory.UNSUPPORTED and not (profile.constraints and profile.constraints.pattern):
         lines = []
         lines.append(f"def {generator_name(profile)}():")
         lines.append(f"    return {_GENERATORS[profile.category](profile)}")
         lines.append("")
-        return lines
-    else:
-        raise NotImplementedError("no deterministic generator for this type")
+        return lines, False
+    lines = []
+    lines.append(f"def {generator_name(profile)}():")
+    message = (
+        f"no deterministic generator for {profile.name!r} "
+        f"(category={profile.category.value})"
+    )
+    lines.append(f"    raise NotImplementedError({message!r})")
+    lines.append("")
+    return lines, True

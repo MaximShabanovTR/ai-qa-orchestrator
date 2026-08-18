@@ -79,6 +79,30 @@ def test_class_name_prefixes_underscore_when_digit_leading():
     assert result.isidentifier()
 
 
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "name,expected",
+    [
+        ("User-Profile", "UserProfilePage"),  # hyphen
+        ("User's Page", "UserSPagePage"),  # apostrophe
+        ("api.v1 Screen", "ApiV1ScreenPage"),  # dot
+        ("order/items", "OrderItemsPage"),  # slash
+    ],
+)
+def test_class_name_handles_general_non_alphanumeric_punctuation(name, expected):
+    # Regression test: class_name used to only whitespace-split the screen
+    # name ("".join(word.capitalize() for word in screen.name.split())),
+    # which left punctuation like hyphens and apostrophes embedded in the
+    # PascalCase name - e.g. "User-Profile" produced "User-profilePage",
+    # a SyntaxError. class_name now routes through pascal_case_identifier,
+    # which tokenizes on any run of non-alphanumeric characters.
+    screen = Screen(id="scr", name=name, elements=[])
+    result = class_name(screen)
+    assert result == expected
+    assert result.isidentifier()
+    compile(f"class {result}: pass", "<test>", "exec")
+
+
 # --- one page class per screen: elements -> properties ---
 
 @pytest.mark.unit
@@ -263,3 +287,43 @@ def test_multi_screen_output_all_parses():
     assert len(artifacts) == 4  # init, base_page, login, dashboard
     for artifact in artifacts:
         ast.parse(artifact.content)
+
+
+# --- regression: hyphenated Screen.id (e.g. "SCR-001") is slugified for the
+#     artifact's actual filename AND every import statement referencing it,
+#     so the two always agree ---
+
+@pytest.mark.unit
+def test_hyphenated_screen_id_produces_slugified_filename_and_matching_import():
+    # Screen.id follows a sanctioned "SCR-001" style convention (see
+    # tests/unit/test_automation_models.py). Used raw, that produced a file
+    # literally named "pages/SCR-001.py" and an import statement
+    # "from pages.SCR-001 import LoginPage" - a SyntaxError, since hyphens
+    # are legal in filenames but not in Python import statements, even
+    # though a file with that exact (invalid) name exists on disk.
+    screens = [
+        Screen(
+            id="SCR-001",
+            name="Login",
+            elements=[
+                Element(id="e_submit", descriptor=TargetDescriptor(role=ElementRole.BUTTON, name="Submit")),
+            ],
+        ),
+        Screen(id="SCR-002", name="Dashboard", elements=[]),
+    ]
+    scenario = Scenario(
+        id="s1",
+        test_case_id="TC-1",
+        steps=[
+            Navigate(screen_ref="SCR-001"),
+            Activate(element_ref="e_submit"),
+            Navigate(screen_ref="SCR-002"),
+        ],
+    )
+    artifacts = artifacts_by_path(screens, [scenario])
+    assert "pages/scr_001.py" in artifacts
+    assert "pages/scr_002.py" in artifacts
+    login_content = artifacts["pages/scr_001.py"].content
+    assert "from pages.scr_002 import DashboardPage" in login_content
+    for artifact in artifacts.values():
+        compile(artifact.content, artifact.path, "exec")

@@ -31,6 +31,7 @@ def render_tests(
     transitions = derive_transitions(screens, scenarios)
 
     start_screens: dict[str, str] = {}
+    navigate_screen_ids: set[str] = set()
     uses_profiles = False
     uses_verify = False
     uses_api = False
@@ -38,15 +39,26 @@ def render_tests(
         for step in scenario.steps:
             if step.verb in ("enter_text", "select") and step.data.kind == "profile_ref":
                 uses_profiles = True
+            if step.verb == "call_operation" and any(
+                value.kind == "profile_ref" for value in step.inputs.values()
+            ):
+                uses_profiles = True
             if step.verb == "verify":
                 uses_verify = True
             if step.verb in _API_STEP_VERBS:
                 uses_api = True
+            if step.verb == "navigate":
+                navigate_screen_ids.add(step.screen_ref)
             sid = step_screen_id(step, element_screen)
             if sid is not None and scenario.id not in start_screens:
                 start_screens[scenario.id] = sid
 
-    used_screen_ids = sorted({sid for sid in start_screens.values()})
+    # Every screen a Navigate step resolves to needs its page class imported
+    # at module scope, not just each scenario's opening screen - a
+    # mid-scenario Navigate instantiates its target class directly (see
+    # _render_step's navigate branch), same as the opening-navigate setup
+    # code does.
+    used_screen_ids = sorted({sid for sid in start_screens.values()} | navigate_screen_ids)
     lines = ["import pytest", ""]
     if uses_verify:
         lines.append("from playwright.sync_api import expect")
@@ -56,8 +68,13 @@ def render_tests(
         lines.append(f"from {conventions.api_dir}.client import ApiClient")
     for screen_id in used_screen_ids:
         screen = screens_by_id[screen_id]
+        # slugify(screen.id), not the raw id - a screen id like "SCR-001"
+        # (the model's own documented convention) contains a hyphen, which
+        # is invalid in a Python import path segment. PageObjectRenderer
+        # slugifies identically for the actual pages/{...}.py filename, so
+        # the two sides agree without needing to coordinate live.
         lines.append(
-            f"from {conventions.pages_dir}.{screen.id} import {page_class_name(screen)}"
+            f"from {conventions.pages_dir}.{slugify(screen.id)} import {page_class_name(screen)}"
         )
     lines.extend(["", ""])
 
@@ -71,6 +88,7 @@ def render_tests(
                 profiles_by_id,
                 operations_by_id,
                 transitions,
+                element_screen,
             )
         )
 
@@ -101,19 +119,75 @@ def resolve_data_ref(data_ref, profiles_by_id: dict[str, DataProfile]) -> str:
 
 def _transition_target(
     current_screen_id: str | None,
-    element_id: str,
+    next_step,
+    element_screen: dict[str, str],
     transitions: dict[str, dict[str, str]],
 ) -> str | None:
-    """If activating `element_id` from `current_screen_id` is a known
-    transition (per PageObjectRenderer's derive_transitions), return the
-    target screen id. Otherwise None - a plain click, no screen change.
+    """If *this scenario's own next step* resolves to a screen different
+    from `current_screen_id`, and PageObjectRenderer generated a go_to_*
+    method for that specific (from, to) pair, return the target screen id.
+    Otherwise None - render a plain click, no screen change.
+
+    Deliberately per-scenario, not a lookup keyed by element identity alone
+    against the aggregated `transitions` map. That map is built by scanning
+    every scenario in the corpus and keeps only the first-encountered
+    triggering element per (from, to) edge (see derive_transitions in
+    transitions.py) - it answers "does some transition exist from this
+    screen via this element anywhere in the corpus?", not "does activating
+    this element in *this* scenario, right now, actually change screens?".
+
+    Two scenarios can both activate the same element (e.g. a "Submit"
+    button on a login screen): a happy-path scenario where it navigates to
+    a dashboard, and a negative scenario (invalid credentials) where the
+    next step is a Verify against an error message on the *same* screen.
+    Looking the element up in the aggregate map alone would incorrectly
+    treat the negative scenario's click as a transition too (it would
+    reuse whichever screen the happy-path scenario registered), corrupting
+    current_screen_id for every step that follows in that scenario. Using
+    this scenario's own steps[i+1] avoids that: the transition/plain-click
+    decision is always grounded in what actually happens next *here*.
+
+    The aggregate `transitions` map is still consulted, but only to confirm
+    PageObjectRenderer actually generated a go_to_* method for this exact
+    (from, to) pair (its method name is derived purely from the target
+    screen's name - see page_object_renderer._render_transition_method -
+    so no element identity is needed from the map itself).
     """
-    if current_screen_id is None:
+    if current_screen_id is None or next_step is None:
         return None
-    for to_screen_id, triggering_element in transitions.get(current_screen_id, {}).items():
-        if triggering_element == element_id:
-            return to_screen_id
-    return None
+    next_screen_id = step_screen_id(next_step, element_screen)
+    if next_screen_id is None or next_screen_id == current_screen_id:
+        return None
+    if next_screen_id not in transitions.get(current_screen_id, {}):
+        return None
+    return next_screen_id
+
+
+def _dedupe_step_inputs(inputs: dict[str, Any]) -> list[tuple[str, Any]]:
+    """Collapse a call_operation step's inputs to one entry per slugified
+    name, keeping the first occurrence.
+
+    Two distinct dict keys that slugify to the same identifier (e.g.
+    "Order ID" and "order-id" both -> order_id) would otherwise render as
+    `api.foo(order_id=X, order_id=Y)` - a duplicate-keyword `SyntaxError`
+    caught only by compile(), not ast.parse(). This mirrors
+    api_client_renderer._dedupe_logical_inputs's rationale exactly (same
+    problem, same first-occurrence-wins resolution), but is a local copy
+    rather than a shared import: api_client_renderer.py is owned by a
+    concurrently-running agent this run. Duplicating this small helper
+    across the two files is a reasonable-for-now tradeoff; extracting a
+    shared version into renderer/naming.py would be worth doing in a
+    follow-up pass once both files are stable again.
+    """
+    seen: set[str] = set()
+    deduped: list[tuple[str, Any]] = []
+    for name, value in inputs.items():
+        slug = slugify(name)
+        if slug in seen:
+            continue
+        seen.add(slug)
+        deduped.append((name, value))
+    return deduped
 
 
 def _operation_call_expr(operation: Operation) -> str:
@@ -162,6 +236,7 @@ def _render_test_function(
     profiles_by_id: dict[str, DataProfile],
     operations_by_id: dict[str, Operation],
     transitions: dict[str, dict[str, str]],
+    element_screen: dict[str, str],
 ) -> list[str]:
     func_name = f"test_{slugify(scenario.test_case_id)}"
     lines = [f"# Scenario: {scenario.id} | Test Case: {scenario.test_case_id}"]
@@ -225,15 +300,18 @@ def _render_test_function(
     if any(step.verb in _API_STEP_VERBS for step in scenario.steps):
         lines.append("    api = ApiClient()")
 
-    for step in scenario.steps:
+    for i, step in enumerate(scenario.steps):
+        next_step = scenario.steps[i + 1] if i + 1 < len(scenario.steps) else None
         step_lines, current_screen_id = _render_step(
             step,
+            next_step,
             current_screen_id,
             screens_by_id,
             element_by_id,
             profiles_by_id,
             operations_by_id,
             transitions,
+            element_screen,
         )
         lines.extend(step_lines)
 
@@ -247,15 +325,47 @@ def _render_test_function(
 
 def _render_step(
     step,
+    next_step,
     current_screen_id: str | None,
     screens_by_id: dict[str, Screen],
     element_by_id: dict[str, Element],
     profiles_by_id: dict[str, DataProfile],
     operations_by_id: dict[str, Operation],
     transitions: dict[str, dict[str, str]],
+    element_screen: dict[str, str],
 ) -> tuple[list[str], str | None]:
     if step.verb == "navigate":
-        return [], step.screen_ref
+        if step.screen_ref == current_screen_id:
+            # Either the scenario's opening Navigate (already rendered by
+            # _render_test_function's setup block: instantiate + navigate),
+            # or a redundant re-navigate to the screen we're already on
+            # (e.g. immediately after an `activate` transition already put
+            # us here - see _transition_target). Either way there's
+            # nothing new to emit; page_obj already points at the right
+            # class.
+            return [], step.screen_ref
+        # A genuine mid-scenario Navigate to a *different* screen: setup
+        # never touched this one, so it must render real navigation,
+        # mirroring the opening-navigate setup code exactly (including the
+        # honest-gap raise when no path is declared) - otherwise this step
+        # silently drops all code and page_obj is left pointing at the old
+        # page class for whatever follows.
+        target_screen = screens_by_id[step.screen_ref]
+        if target_screen.path is None:
+            return (
+                [
+                    f'    raise NotImplementedError('
+                    f'"no path declared for screen {target_screen.id} - cannot navigate at design time")'
+                ],
+                step.screen_ref,
+            )
+        return (
+            [
+                f"    page_obj = {page_class_name(target_screen)}(page, base_url)",
+                f"    page_obj.navigate({target_screen.path!r})",
+            ],
+            step.screen_ref,
+        )
 
     if step.verb in ("enter_text", "select", "toggle"):
         prop = slugify(element_by_id[step.element_ref].descriptor.name)
@@ -270,7 +380,7 @@ def _render_step(
 
     if step.verb == "activate":
         prop = slugify(element_by_id[step.element_ref].descriptor.name)
-        target_id = _transition_target(current_screen_id, step.element_ref, transitions)
+        target_id = _transition_target(current_screen_id, next_step, element_screen, transitions)
         if target_id is not None:
             target_screen = screens_by_id[target_id]
             method = f"go_to_{slugify(target_screen.name)}"
@@ -297,7 +407,7 @@ def _render_step(
         # list up.
         kwargs = ", ".join(
             f"{slugify(name)}={resolve_data_ref(value, profiles_by_id)}"
-            for name, value in step.inputs.items()
+            for name, value in _dedupe_step_inputs(step.inputs)
         )
         return [f"    response = {call_expr}({kwargs})"], current_screen_id
 

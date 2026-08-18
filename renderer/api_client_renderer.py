@@ -1,6 +1,6 @@
 from models.automation import DataCategory, DataProfile, Operation
 from renderer.models import ArtifactKind, CodeArtifact, RendererConventions
-from renderer.naming import slugify
+from renderer.naming import pascal_case_identifier, slugify
 
 _HTTP_METHODS = ["get", "post", "put", "patch", "delete"]
 
@@ -99,13 +99,7 @@ def _render_endpoint_urls(resources: list[str], conventions: RendererConventions
 
 
 def endpoint_class_name(resource: str) -> str:
-    words = resource.replace("_", " ").replace("-", " ").split()
-    name = "".join(word.capitalize() for word in words) + "Endpoint"
-    # A resource that starts with a digit (e.g. "3d_models") would otherwise
-    # produce an invalid Python identifier ("3dModelsEndpoint") - mirror
-    # slugify's digit-leading guard here since this name-building path
-    # doesn't go through slugify() itself.
-    return f"_{name}" if name[:1].isdigit() else name
+    return pascal_case_identifier(resource) + "Endpoint"
 
 
 def _render_endpoint_class(
@@ -220,7 +214,7 @@ def _method_params(operation: Operation) -> list[str]:
 
 
 def _request_model_name(operation: Operation) -> str:
-    return "".join(word.capitalize() for word in method_name(operation).split("_")) + "Request"
+    return pascal_case_identifier(operation.intent) + "Request"
 
 
 def _render_request_model(

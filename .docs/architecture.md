@@ -405,6 +405,16 @@ Each artifact renderer is a pure function `(model slice, conventions) → list[C
 
 ---
 
+## Transition rendering is per-scenario; the aggregate transition map is PageObjectRenderer's alone
+
+**Decision:** `derive_transitions()` (`renderer/transitions.py`) builds one aggregate `{from_screen: {to_screen: element_id}}` map across every scenario, using `setdefault` so the first scenario to register an edge wins. That aggregate map is the correct input for exactly one thing: deciding which `go_to_*` methods `PageObjectRenderer` generates on a page class — a page class needs to expose every transition *any* scenario in the corpus might trigger from it. It is **not** a valid input for `TestRenderer`'s own per-step decision. Whether a specific `activate` step in a specific scenario should render as a transition call (`page_obj = page_obj.go_to_x()`) or a plain click (`page_obj.button.click()`) must be decided from *that scenario's own next step* — `TestRenderer` looks ahead at `scenario.steps[i+1]` directly (the same `step_screen_id()` lookahead `derive_transitions()` already does internally while building its map) and only consults the aggregate map afterward, to confirm a `go_to_*` method actually exists for that specific `(from, to)` pair.
+
+**Why this matters — the failure mode without it:** two scenarios can legitimately activate the *same element* with different outcomes — a happy-path login (Submit → Dashboard) and an invalid-credentials login (Submit → stays on Login, shows an error). If the transition-vs-click decision were made from the aggregate map alone, the second scenario would incorrectly render the first's `go_to_dashboard()` call, silently pointing `page_obj` at the wrong page class for every step that follows — a semantically broken test that still parses and still compiles, only failing with a confusing `AttributeError` when pytest actually runs it. Since negative-path coverage (validation errors, permission-denied, invalid input) is a stated core deliverable of this whole system, and "same control, different outcome depending on input validity" is close to the canonical shape of a negative test case, this was a real correctness gap, not a hypothetical one.
+
+**Corollary:** any future renderer that needs to reason about "what does clicking X do" must ask the same question — *from this scenario's own evidence*, not from a corpus-wide aggregate — unless it is specifically building a *capability* (like a page class's full method set), where the aggregate is exactly what's wanted.
+
+---
+
 ## Generated framework has zero third-party runtime dependencies
 
 **Decision:** Renderer output may import only `pytest`, `pytest-playwright`, and the Python standard library — never a third-party package such as `Faker`. This applies to every artifact renderer, but is most consequential for `DataRenderer`'s constraint-driven generators (`random`/`string`/`datetime` only).
