@@ -248,7 +248,7 @@ Templates live in `prompts/*.md`. They use Python's `.format(**kwargs)` for vari
 
 - `generators/playwright_generator.py` — legacy stub; raises `NotImplementedError`. Superseded by `renderer/` for Stage 4 codegen — not reused, not extended.
 - `models/automation.py` — Semantic Automation Model schema (Stage 4 design; see `.docs/architecture.md`). Fully implemented and unit-tested.
-- `renderer/` — deterministic `AutomationModel` → framework renderer (Stage 4; see `.docs/architecture.md`). `ScaffoldRenderer`, `PageObjectRenderer`, `DataRenderer`, `ApiClientRenderer`, `TestRenderer`, and the `FrameworkRenderer` composition root are all implemented and unit-tested (`tests/unit/test_test_renderer.py`, `tests/unit/test_framework_renderer.py`). Nothing produces an `AutomationModel` yet (no perception agent), and no node or graph edge calls the renderer — it is exercised only by unit tests and manual end-to-end checks so far.
+- `renderer/` — deterministic `AutomationModel` → framework renderer (Stage 4; see `.docs/architecture.md`). All six modules (`ScaffoldRenderer`, `PageObjectRenderer`, `DataRenderer`, `ApiClientRenderer`, `TestRenderer`, `FrameworkRenderer`) are implemented with full unit test coverage (`tests/unit/test_*.py` per module) including golden-file comparisons for the most stable outputs (`tests/unit/golden/`). Nothing produces an `AutomationModel` yet (no perception agent), and no node or graph edge calls the renderer.
 
 Do not implement these unless explicitly asked.
 
@@ -331,7 +331,8 @@ renderer/
   test_renderer.py           ← Scenario/Step → pytest test functions; all 9 step verbs; suitability/Unsupported skip routing
   framework_renderer.py      ← FrameworkRenderer composition root: calls all five render_* functions, concatenates into one FrameworkManifest
 tests/
-  unit/                      ← fast, no I/O (TraceabilityMatrix, PlannerDecision, review _check_* methods, automation model contracts, TestRenderer, FrameworkRenderer, etc.)
+  unit/                      ← fast, no I/O (TraceabilityMatrix, PlannerDecision, review _check_* methods, automation model contracts, all six renderer modules, etc.)
+    golden/                  ← golden-file fixtures for the most stable renderer outputs (scaffold, full FrameworkManifest example)
   contract/                  ← mocked LLM, schema validation, remediation loop end-to-end
   smoke/                     ← real LLM, schema-only assertions
   evals/                     ← real LLM, quality rubric

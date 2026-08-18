@@ -100,7 +100,12 @@ def _render_endpoint_urls(resources: list[str], conventions: RendererConventions
 
 def endpoint_class_name(resource: str) -> str:
     words = resource.replace("_", " ").replace("-", " ").split()
-    return "".join(word.capitalize() for word in words) + "Endpoint"
+    name = "".join(word.capitalize() for word in words) + "Endpoint"
+    # A resource that starts with a digit (e.g. "3d_models") would otherwise
+    # produce an invalid Python identifier ("3dModelsEndpoint") - mirror
+    # slugify's digit-leading guard here since this name-building path
+    # doesn't go through slugify() itself.
+    return f"_{name}" if name[:1].isdigit() else name
 
 
 def _render_endpoint_class(
@@ -185,11 +190,33 @@ def method_name(operation: Operation) -> str:
     return slugify(operation.intent)
 
 
+def _dedupe_logical_inputs(logical_inputs: list[str]) -> list[str]:
+    """Collapse logical inputs that slugify to the same identifier, keeping
+    the first occurrence's original text.
+
+    Two differently-worded logical inputs (e.g. "Order ID" and "order-id")
+    slugify to the same name. Left un-deduped, that renders a dataclass field
+    / function parameter twice - a `SyntaxError` at compile time, not caught
+    by `ast.parse()` (duplicate-argument checking happens later, in
+    `compile()`). Both `_method_params` and `_render_request_model` must
+    apply this the same way to stay in lockstep (see the comment below).
+    """
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for name in logical_inputs:
+        slug = slugify(name)
+        if slug in seen:
+            continue
+        seen.add(slug)
+        deduped.append(name)
+    return deduped
+
+
 def _method_params(operation: Operation) -> list[str]:
     # Must match _render_request_model's field naming exactly - these names
     # get passed as SubmitPaymentRequest(order_id=order_id, ...), so param
     # names and dataclass field names have to be identical strings.
-    return [slugify(name) for name in operation.logical_inputs]
+    return [slugify(name) for name in _dedupe_logical_inputs(operation.logical_inputs)]
 
 
 def _request_model_name(operation: Operation) -> str:
@@ -202,7 +229,7 @@ def _render_request_model(
     if not operation.logical_inputs:
         return []
     lines = ["@dataclass", f"class {_request_model_name(operation)}:"]
-    for input_ref in operation.logical_inputs:
+    for input_ref in _dedupe_logical_inputs(operation.logical_inputs):
         field_name = slugify(input_ref)
         profile = profiles_by_id.get(input_ref)
         py_type = _CATEGORY_TYPES.get(profile.category, "str") if profile else "str"

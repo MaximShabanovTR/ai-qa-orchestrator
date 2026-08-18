@@ -255,6 +255,7 @@ ai-qa-orchestrator/
 │
 ├── tests/
 │   ├── unit/                        # Fast, no I/O — models, review checks, planner, automation contracts, renderer
+│   │   └── golden/                  # Golden-file fixtures for the most stable renderer outputs
 │   ├── contract/                    # Mocked LLM — agent wiring, remediation loop end-to-end
 │   ├── smoke/                       # Real LLM — schema-only assertions
 │   └── evals/                       # Real LLM — quality rubric
@@ -367,7 +368,7 @@ Penalty weights live in `ClarificationRound.completeness_score` in `models/clari
 | Test case review layer | Done | Deterministic + LLM hybrid `ReviewAgent`, advisory quality gate |
 | Remediation loop | Done | Deterministic `PlannerDecision` drives bounded regenerate-on-failure |
 | Semantic Automation Model | Designed | Framework-neutral schema for Playwright generation — see `.docs/architecture.md`; implemented in `models/automation.py`, not yet wired into the workflow |
-| Playwright test generation | Done (renderer) | Deterministic renderer: `AutomationModel` → runnable pytest/Playwright framework. `ScaffoldRenderer`/`PageObjectRenderer`/`DataRenderer`/`ApiClientRenderer`/`TestRenderer` plus the `FrameworkRenderer` composition root are built and unit-tested. No perception agent produces an `AutomationModel` yet, and the renderer is not wired into the workflow. |
+| Playwright test generation | Done (renderer) | Deterministic renderer: `AutomationModel` → runnable pytest/Playwright framework. `ScaffoldRenderer`/`PageObjectRenderer`/`DataRenderer`/`ApiClientRenderer`/`TestRenderer` plus the `FrameworkRenderer` composition root are built with full unit and golden-file test coverage (`tests/unit/golden/`). No perception agent produces an `AutomationModel` yet, and the renderer is not wired into the workflow. |
 
 ---
 

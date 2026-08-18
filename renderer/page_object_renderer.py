@@ -48,7 +48,12 @@ def _render_base_page(conventions: RendererConventions) -> CodeArtifact:
 
 
 def class_name(screen: Screen) -> str:
-    return "".join(word.capitalize() for word in screen.name.split()) + "Page"
+    name = "".join(word.capitalize() for word in screen.name.split()) + "Page"
+    # A screen name that starts with a digit (e.g. "3D Viewer") would otherwise
+    # produce an invalid Python identifier ("3dViewerPage") - mirror slugify's
+    # digit-leading guard here since this name-building path doesn't go through
+    # slugify() itself.
+    return f"_{name}" if name[:1].isdigit() else name
 
 
 def _property_name(element: Element) -> str:
