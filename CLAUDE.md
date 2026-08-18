@@ -38,7 +38,7 @@ api/app.py (FastAPI)
 | Services | `services/` | Anthropic SDK wrapper, JSON/Markdown serializers |
 | Prompts | `prompts/` | Markdown templates with `{placeholder}` variables |
 | Generators | `generators/` | Legacy pre-Stage-4 stub; superseded by `renderer/`, not extended |
-| Renderer | `renderer/` | Deterministic `AutomationModel` → Playwright/pytest framework code (Stage 4; in progress, not yet wired in) |
+| Renderer | `renderer/` | Deterministic `AutomationModel` → Playwright/pytest framework code (Stage 4; complete, not yet wired in) |
 
 ---
 
@@ -248,7 +248,7 @@ Templates live in `prompts/*.md`. They use Python's `.format(**kwargs)` for vari
 
 - `generators/playwright_generator.py` — legacy stub; raises `NotImplementedError`. Superseded by `renderer/` for Stage 4 codegen — not reused, not extended.
 - `models/automation.py` — Semantic Automation Model schema (Stage 4 design; see `.docs/architecture.md`). Fully implemented and unit-tested.
-- `renderer/` — deterministic `AutomationModel` → framework renderer (Stage 4; see `.docs/architecture.md`). `ScaffoldRenderer`, `PageObjectRenderer`, `DataRenderer`, `ApiClientRenderer`, `TestRenderer` implemented and unit-tested (`tests/unit/test_test_renderer.py`). The `FrameworkRenderer` composition root is not yet built — nothing wires the per-artifact renderers together into one call. Nothing produces an `AutomationModel` yet (no perception agent), and no node or graph edge calls the renderer.
+- `renderer/` — deterministic `AutomationModel` → framework renderer (Stage 4; see `.docs/architecture.md`). `ScaffoldRenderer`, `PageObjectRenderer`, `DataRenderer`, `ApiClientRenderer`, `TestRenderer`, and the `FrameworkRenderer` composition root are all implemented and unit-tested (`tests/unit/test_test_renderer.py`, `tests/unit/test_framework_renderer.py`). Nothing produces an `AutomationModel` yet (no perception agent), and no node or graph edge calls the renderer — it is exercised only by unit tests and manual end-to-end checks so far.
 
 Do not implement these unless explicitly asked.
 
@@ -329,8 +329,9 @@ renderer/
   data_renderer.py           ← DataProfile → typed constants / stdlib-only generator functions
   api_client_renderer.py     ← Operation → resource-grouped client classes; dataclass request bodies; env-var-sourced endpoint URLs
   test_renderer.py           ← Scenario/Step → pytest test functions; all 9 step verbs; suitability/Unsupported skip routing
+  framework_renderer.py      ← FrameworkRenderer composition root: calls all five render_* functions, concatenates into one FrameworkManifest
 tests/
-  unit/                      ← fast, no I/O (TraceabilityMatrix, PlannerDecision, review _check_* methods, automation model contracts, TestRenderer, etc.)
+  unit/                      ← fast, no I/O (TraceabilityMatrix, PlannerDecision, review _check_* methods, automation model contracts, TestRenderer, FrameworkRenderer, etc.)
   contract/                  ← mocked LLM, schema validation, remediation loop end-to-end
   smoke/                     ← real LLM, schema-only assertions
   evals/                     ← real LLM, quality rubric
